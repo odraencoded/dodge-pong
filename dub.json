@@ -1,0 +1,13 @@
+{
+	"name": "Dodge Pong",
+	"description": "A Ludum Dare game.",
+	"copyright": "Copyright © 2014, Leonardo Augusto Pereira",
+	"authors": ["Leonardo Augusto Pereira"],
+	"lflags" : ["+C:\\lib\\DSFML\\"],
+	"targetName" : "dodge-pong",
+	"targetPath" : "debug\\",
+	"buildRequirements": ["allowWarnings"],
+	"dependencies": {
+		"dsfml:graphics": "~master",
+	},
+}
