@@ -2,6 +2,8 @@
 
 import std.stdio;
 import std.math;
+import std.array;
+import random = std.random;
 
 import dsfml.graphics;
 import dsfml.system;
@@ -31,8 +33,16 @@ enum PONGER_FRICTION = PONGER_VELOCITY_CAP / .2;
 // Goes full speed in .2 seconds
 enum PONGER_ACCEL = PONGER_VELOCITY_CAP / .2 + PONGER_FRICTION;
 
-immutable double[4] PONGER_BOUNDARY = [-12, -10, 12, 10];
+enum BALL_START_SPEED = 600 / .5;
+
 immutable PONGER_HITBOX = Box(-10, -12, 20, 25);
+immutable BALL_HITBOX = Box(-4, -4, 8, 8);
+
+enum BALL_STEP_SIZE = 10.0;
+enum BALL_STEP_THRESHOLD = .2;
+enum TRACE_LIFE = 0.4;
+enum TRACE_INTERVAL = 6;
+
 
 void main(string[] args) {
 	// Setup game
@@ -68,6 +78,7 @@ void main(string[] args) {
 	}
 }
 
+// The game class
 class DodgePong : Drawable {
 	// Need this to draw stuff
 	RenderWindow window;
@@ -76,6 +87,7 @@ class DodgePong : Drawable {
 	
 	// A.K.A. the player
 	Ponger ponger;
+	Ball ball;
 	
 	// Playable area of the game
 	Box playBoundaries;
@@ -97,8 +109,19 @@ class DodgePong : Drawable {
 		// Start up player
 		ponger = new Ponger();
 		ponger.x = GAME_WIDTH / 2;
-		ponger.y = GAME_HEIGHT / 2;
+		ponger.y = GAME_HEIGHT / 5 * 4;
+		
+		// Start up ball
+		ball = new Ball();
+		ball.x = GAME_WIDTH / 2;
+		ball.y = GAME_HEIGHT / 5 * 1;
+		
+		auto startAngle = random.uniform(20.0, 70.0) * random.uniform(0, 3);
+		ball.vel_x = cos(startAngle / 180 * PI) * BALL_START_SPEED;
+		ball.vel_y = sin(startAngle / 180 * PI) * BALL_START_SPEED;
+		
 	}
+	
 	
 	// Gets input done by the player and stores it in a PlayerInput structure
 	void gatherInput(out PlayerInput* playerInput) {
@@ -148,6 +171,7 @@ class DodgePong : Drawable {
 		}
 	}
 	
+	
 	// Processes player input
 	void processInput(in PlayerInput* playerInput) {
 		if(playerInput.closedWindow) {
@@ -168,20 +192,120 @@ class DodgePong : Drawable {
 		ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
 	}
 	
+	
 	// Updates game variables based on time
 	void update(in double delta) {
+		Box hitbox, containedBox;
+		
+		// Update ponger
 		ponger.updateSpeed(delta);
 		
 		ponger.x += ponger.vel_x * delta;
 		ponger.y += ponger.vel_y * delta;
 		
-		// Keep ponger inside boundaries
-		auto hitbox = ponger.getHitbox();
-		auto containedBox = hitbox.moveInside(playBoundaries);
+		// Boundary collision
+		hitbox = ponger.getHitbox();
+		containedBox = hitbox.moveInside(playBoundaries);
 		
 		// Update based on offset
 		ponger.x += containedBox.left - hitbox.left;
 		ponger.y += containedBox.top - hitbox.top;
+		
+		// Updating the ball
+		double distanceLeft = vectorLength(ball.vel_x * delta, ball.vel_y * delta);
+		
+		do {
+			double nvx, nvy, vel;
+			normalize(ball.vel_x * delta, ball.vel_y * delta, nvx, nvy, vel);
+			
+			double step = distanceLeft;
+			step.cap(0, BALL_STEP_SIZE);
+			
+			// Remember position
+			auto px = ball.x;
+			auto py = ball.y;
+			
+			// Spin ball
+			auto angle = atan2(ball.vel_y, ball.vel_x);
+			angle += ball.vel_angle * delta * (step / distanceLeft);
+			nvx = cos(angle);
+			nvy = sin(angle);
+			ball.vel_x = nvx * vel / delta;
+			ball.vel_y = nvy * vel / delta;
+			
+			// Move the ball
+			ball.x += nvx * step;
+			ball.y += nvy * step;
+			
+			// Check collision
+			hitbox = ball.getHitbox();
+			containedBox = hitbox.moveInside(playBoundaries);
+			
+			if(hitbox != containedBox) {
+				ball.x += containedBox.left - hitbox.left;
+				ball.y += containedBox.top - hitbox.top;
+				
+				double rotate = 0;
+				
+				bool[4] partsOutside = hitbox.getPartsOutside(playBoundaries);
+				if(partsOutside[NORTH] || partsOutside[SOUTH]) {
+					ball.vel_y *= -1;
+					if(partsOutside[NORTH]) {
+						rotate -= ball.vel_x;
+					} else {
+						rotate += ball.vel_x;
+					}
+				}
+				if(partsOutside[WEST] || partsOutside[EAST]) {
+					ball.vel_x *= -1;
+					if(partsOutside[WEST]) {
+						rotate -= ball.vel_y;
+					} else {
+						rotate += ball.vel_y;
+					}
+				}
+				
+				rotate /= vel / delta;
+				ball.vel_angle += rotate * PI / 4;
+				ball.vel_angle.cap(-PI/4, PI/4);
+
+				// Spin ball
+				angle = atan2(ball.vel_y, ball.vel_x);
+				auto angle_change = PI / (16 - abs(rotate) * 6);
+				angle += random.uniform(-angle_change, angle_change);
+				
+				nvx = cos(angle);
+				nvy = sin(angle);
+				
+				ball.vel_x = nvx * vel / delta;
+				ball.vel_y = nvy * vel / delta;
+			}
+			
+			// Calculate displacement
+			auto dx = ball.x - px;
+			auto dy = ball.y - py;
+			auto dl = vectorLength(dx, dy);
+			
+			distanceLeft -= dl;
+			ball.addTraceFrom(px, py);
+			
+		} while(distanceLeft > BALL_STEP_THRESHOLD);
+		
+		// Age particles
+		int cut = -1;
+		auto particles = ball.traceParticles;
+		for(int i = particles.length - 1; i >= 0; i--) {
+			auto p = &particles[i];
+			p.life -= delta;
+			if(p.life <= 0) {
+				cut = i;
+				break;
+			}
+		}
+		
+		if(cut != -1) {
+			ball.traceParticles = array(ball.traceParticles[cut + 1..$]);
+		}
 	}
 	
 	// Render game
@@ -189,21 +313,56 @@ class DodgePong : Drawable {
 		renderTarget.clear(BACKGROUND_COLOR);
 		
 		// Rendering the player
-		enum PLAYER_HEIGHT = 25;
-		enum PLAYER_WIDTH = 20;
+		enum PLAYER_HEIGHT = 40;
+		enum PLAYER_WIDTH = 35;
+		enum PLAYER_SIZE = Vector2f(PLAYER_WIDTH, PLAYER_HEIGHT);
 		
 		Transform t = Transform.Identity;
 		t.translate(ponger.x, ponger.y);
 		t.translate(-PLAYER_WIDTH / 2, -PLAYER_HEIGHT / 2);
 		
-		auto pongerSprite = new RectangleShape(Vector2f(0, 0));
-		pongerSprite.size = Vector2f(PLAYER_WIDTH, PLAYER_HEIGHT);
+		auto pongerSprite = new RectangleShape(PLAYER_SIZE);
 		pongerSprite.fillColor = Color(255, 255, 255);
 		
 		states.transform = t;
 		renderTarget.draw(pongerSprite, states);
+		
+		// Rendering of the ball
+		enum BALL_RADIUS = 5;
+		
+		// Rendering particles
+		auto particleSprite = new CircleShape(BALL_RADIUS);
+		foreach(const TracePartcile p; ball.traceParticles) {
+			t = Transform.Identity;
+			t.translate(p.x, p.y);
+			t.translate(-BALL_RADIUS, -BALL_RADIUS);
+			
+			auto scale = p.life / TRACE_LIFE;
+			t.scale(.6 + .4 * scale, .6 + .4 * scale);
+			particleSprite.fillColor = Color(
+				cast(ubyte)(255 * scale),
+				255,
+				cast(ubyte)(255* scale),
+				cast(ubyte)(255 * scale)
+			);
+			
+			states.transform = t;
+			renderTarget.draw(particleSprite, states);
+		}
+		
+		// Rendering of the ball
+		t = Transform.Identity;
+		t.translate(ball.x, ball.y);
+		t.translate(-BALL_RADIUS, -BALL_RADIUS);
+		
+		auto ballSprite = new CircleShape(BALL_RADIUS);
+		ballSprite.fillColor = Color(255, 255, 255);
+		
+		states.transform = t;
+		renderTarget.draw(ballSprite, states);
 	}
 }
+
 
 // Used to store game input
 struct PlayerInput {
@@ -213,6 +372,8 @@ struct PlayerInput {
 	bool[int] pressedButton, releasedButton;
 }
 
+
+// Represents the player
 class Ponger {
 	// Position in the game
 	double x, y;
@@ -261,9 +422,73 @@ class Ponger {
 	}
 }
 
+
+// Represents the ball
+class Ball {
+	// Position in the game
+	double x, y;
+	
+	// Movement rate
+	double vel_x = 0, vel_y = 0;
+	double vel_angle = 0;
+	
+	// The trace left by the ball
+	TracePartcile[] traceParticles;
+	double traceRemainder = 0;
+	
+	Box getHitbox() pure const {
+		return BALL_HITBOX.shift(x, y);
+	}
+	
+	void addTraceFrom(in double fx, in double fy) pure {
+		// Calculate displacement
+		auto dx = x - fx;
+		auto dy = y - fy;
+		
+		// Normalize difference
+		double nx, ny, distance;
+		normalize(dx, dy, nx, ny, distance);
+		
+		auto traceLength = traceRemainder + distance;
+		auto particleCount = traceLength / TRACE_INTERVAL;
+		for(int i = 1; i <= particleCount; i++) {
+			auto progress = TRACE_INTERVAL * i - traceRemainder;
+			TracePartcile newParticle;
+			newParticle.x = fx + nx * progress;
+			newParticle.y = fy + ny * progress;
+			newParticle.life = TRACE_LIFE;
+			traceParticles ~= newParticle;
+		}
+		
+		// Update remainder
+		traceRemainder = (traceRemainder + distance) % TRACE_INTERVAL;
+	}
+}
+
+
+struct TracePartcile {
+	double x, y, life;
+}
+
 // Utility to cap a value
 void cap(ref double value, in double  bottom, in double top) pure nothrow {
 	value = value > bottom ? (value < top ? value : top) : bottom ;
+}
+
+void normalize(in double x, in double y,
+               out double nx, out double ny, out double l) pure nothrow {
+		l = vectorLength(x, y);
+		if(l == 0) {
+			nx = 0;
+			ny = 0;
+		} else {
+			nx = x / l;
+			ny = y / l;
+		}
+}
+
+double vectorLength(in double x, in double y) pure nothrow {
+	return sqrt(x * x + y * y);
 }
 
 // Utility to do the collisions
@@ -288,12 +513,12 @@ struct Box {
 		return Box(left + x, top + y, width, height);
 	}
 	
-	bool[4] partsOutside(in Box container) pure const {
+	bool[4] getPartsOutside(in Box container) pure const {
 		bool[4] result;
-		result[NORTH] = top < container.top;
+		result[NORTH] = top     < container.top;
+		result[EAST]  = right  >= container.right;
 		result[SOUTH] = bottom >= container.bottom;
-		result[WEST] = left < container.left;
-		result[EAST] = right >= container.right;
+		result[WEST]  = left    < container.left;
 		return result;
 	}
 	
