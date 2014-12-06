@@ -19,6 +19,8 @@ enum GO_NORTH_KEY = Keyboard.Key.Up;
 enum GO_EAST_KEY  =  Keyboard.Key.Right;
 enum GO_SOUTH_KEY = Keyboard.Key.Down;
 enum GO_WEST_KEY  = Keyboard.Key.Left;
+enum SWING_CW_KEY = Keyboard.Key.D;
+enum SWING_CCW_KEY = Keyboard.Key.A;
 
 // Ponger directional input map
 enum NORTH = 0;
@@ -83,7 +85,7 @@ class DodgePong : Drawable {
 	// Need this to draw stuff
 	RenderWindow window;
 	bool isRunning = false;
-	int[int] keyDirectionalMap;
+	Direction[int] keyDirectionalMap;
 	
 	// A.K.A. the player
 	Ponger ponger;
@@ -98,10 +100,10 @@ class DodgePong : Drawable {
 		window = new RenderWindow(videoMode, GAME_TITLE);
 		
 		// Setup key map
-		keyDirectionalMap[GO_NORTH_KEY] = NORTH;
-		keyDirectionalMap[GO_EAST_KEY] = EAST;
-		keyDirectionalMap[GO_SOUTH_KEY] = SOUTH;
-		keyDirectionalMap[GO_WEST_KEY] = WEST;
+		keyDirectionalMap[GO_NORTH_KEY] = Direction.North;
+		keyDirectionalMap[GO_EAST_KEY]  = Direction.East ;
+		keyDirectionalMap[GO_SOUTH_KEY] = Direction.South;
+		keyDirectionalMap[GO_WEST_KEY]  = Direction.West ;
 		keyDirectionalMap.rehash();
 		
 		playBoundaries = Box(0, 0, GAME_WIDTH, GAME_HEIGHT);
@@ -179,9 +181,10 @@ class DodgePong : Drawable {
 		}
 		
 		// Figure out where the player is going
-		foreach(int key, int direction; keyDirectionalMap) {
+		foreach(int key, Direction direction; keyDirectionalMap) {
 			if(playerInput.pressedKey.get(key, false)) {
 				ponger.going[direction] = true;
+				ponger.facing = direction;
 			}
 			
 			if(playerInput.releasedKey.get(key, false)) {
@@ -195,8 +198,11 @@ class DodgePong : Drawable {
 	
 	// Updates game variables based on time
 	void update(in double delta) {
-		Box hitbox, containedBox;
-		
+		updatePonger(delta);
+		updateBall(delta);
+	}
+	
+	void updatePonger(in double delta) {
 		// Update ponger
 		ponger.updateSpeed(delta);
 		
@@ -204,14 +210,15 @@ class DodgePong : Drawable {
 		ponger.y += ponger.vel_y * delta;
 		
 		// Boundary collision
-		hitbox = ponger.getHitbox();
-		containedBox = hitbox.moveInside(playBoundaries);
+		Box hitbox = ponger.getHitbox();
+		Box containedBox = hitbox.moveInside(playBoundaries);
 		
 		// Update based on offset
 		ponger.x += containedBox.left - hitbox.left;
 		ponger.y += containedBox.top - hitbox.top;
-		
-		// Updating the ball
+	}
+	
+	void updateBall(in double delta) {
 		double distanceLeft = vectorLength(ball.vel_x * delta, ball.vel_y * delta);
 		
 		do {
@@ -238,8 +245,8 @@ class DodgePong : Drawable {
 			ball.y += nvy * step;
 			
 			// Check collision
-			hitbox = ball.getHitbox();
-			containedBox = hitbox.moveInside(playBoundaries);
+			Box hitbox = ball.getHitbox();
+			Box containedBox = hitbox.moveInside(playBoundaries);
 			
 			if(hitbox != containedBox) {
 				ball.x += containedBox.left - hitbox.left;
@@ -311,7 +318,12 @@ class DodgePong : Drawable {
 	// Render game
 	override void draw(RenderTarget renderTarget, RenderStates states) {
 		renderTarget.clear(BACKGROUND_COLOR);
-		
+		renderPlayer(renderTarget, states);
+		renderBall(renderTarget, states);
+	}
+	
+	
+	void renderPlayer(RenderTarget renderTarget, RenderStates states) {
 		// Rendering the player
 		enum PLAYER_HEIGHT = 40;
 		enum PLAYER_WIDTH = 35;
@@ -326,6 +338,32 @@ class DodgePong : Drawable {
 		
 		states.transform = t;
 		renderTarget.draw(pongerSprite, states);
+		
+		// Draw facing(change this later)
+		enum FACING_WIDTH = 8;
+		auto facingSprite = new RectangleShape(PLAYER_SIZE);
+		
+		if(ponger.facing == Direction.North) {
+			facingSprite.size = Vector2f(PLAYER_WIDTH, FACING_WIDTH);
+		} else if(ponger.facing == Direction.East) {
+			facingSprite.size = Vector2f(FACING_WIDTH, PLAYER_HEIGHT);
+			t.translate(PLAYER_WIDTH - FACING_WIDTH, 0);
+		} else if(ponger.facing == Direction.South) {
+			facingSprite.size = Vector2f(PLAYER_WIDTH, FACING_WIDTH);
+			t.translate(0, PLAYER_HEIGHT - FACING_WIDTH);
+		} else if(ponger.facing == Direction.West) {
+			facingSprite.size = Vector2f(FACING_WIDTH, PLAYER_HEIGHT);
+		}
+		
+		facingSprite.fillColor = Color(255, 0, 0);
+		
+		states.transform = t;
+		renderTarget.draw(facingSprite, states);
+	}
+	
+	
+	void renderBall(RenderTarget renderTarget, RenderStates states) {
+		Transform t;
 		
 		// Rendering of the ball
 		enum BALL_RADIUS = 5;
@@ -378,12 +416,16 @@ class Ponger {
 	// Position in the game
 	double x, y;
 	
+	// Swing!!!
+	PongerSwing* swing;
+	
 	// Movement rate
 	double vel_x = 0, vel_y = 0;
 	
 	// Where the ponger is going, relative coordinates -1..1
 	int going_x, going_y;
 	int[4] going = [false, false, false, false];
+	Direction facing = Direction.North;
 	
 	// Gets the ponger's hitbox
 	Box getHitbox() pure const @property {
@@ -396,6 +438,7 @@ class Ponger {
 		if(going[SOUTH]) y += 1;
 		if(going[WEST]) x -= 1;
 	}
+	
 	
 	void updateSpeed(in double delta) pure {
 		// Apply friction
@@ -420,6 +463,24 @@ class Ponger {
 		cap(vel_x, -PONGER_VELOCITY_CAP, PONGER_VELOCITY_CAP);
 		cap(vel_y, -PONGER_VELOCITY_CAP, PONGER_VELOCITY_CAP);
 	}
+}
+
+// Representing a swing from the ponger
+struct PongerSwing {
+	Direction direction;
+	double duration;
+}
+
+
+// Swing direction
+enum Direction {
+	North  = 0,
+	East   = 1,
+	South  = 2,
+	West   = 3,
+	
+	Clockwise,
+	CounterClockwise
 }
 
 
@@ -532,3 +593,5 @@ struct Box {
 		return result;
 	}
 }
+
+
