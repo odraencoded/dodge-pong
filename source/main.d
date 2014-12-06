@@ -37,7 +37,7 @@ enum PONGER_ACCEL = PONGER_VELOCITY_CAP / .2 + PONGER_FRICTION;
 
 enum BALL_START_SPEED = 600 / .5;
 
-immutable PONGER_HITBOX = Box(-10, -12, 20, 25);
+immutable PONGER_HITBOX = Box(-20, -17, 34, 40);
 immutable BALL_HITBOX = Box(-4, -4, 8, 8);
 
 enum BALL_STEP_SIZE = 10.0;
@@ -45,6 +45,7 @@ enum BALL_STEP_THRESHOLD = .2;
 enum TRACE_LIFE = 0.4;
 enum TRACE_INTERVAL = 6;
 
+enum SWING_MAX_DURATION = 0.15;
 
 void main(string[] args) {
 	// Setup game
@@ -193,6 +194,16 @@ class DodgePong : Drawable {
 		}
 		
 		ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
+		
+		if(playerInput.pressedKey.get(SWING_CW_KEY, false)) {
+			ponger.swing = new PongerSwing();
+			ponger.swing.direction = Turning.Clockwise;
+		}
+		
+		if(playerInput.pressedKey.get(SWING_CCW_KEY, false)) {
+			ponger.swing = new PongerSwing();
+			ponger.swing.direction = Turning.CounterClockwise;
+		}
 	}
 	
 	
@@ -216,6 +227,14 @@ class DodgePong : Drawable {
 		// Update based on offset
 		ponger.x += containedBox.left - hitbox.left;
 		ponger.y += containedBox.top - hitbox.top;
+		
+		auto swing = ponger.swing;
+		if(swing) {
+			swing.duration += delta;
+			if(swing.duration > SWING_MAX_DURATION) {
+				ponger.swing = null;
+			}
+		}
 	}
 	
 	void updateBall(in double delta) {
@@ -233,12 +252,14 @@ class DodgePong : Drawable {
 			auto py = ball.y;
 			
 			// Spin ball
-			auto angle = atan2(ball.vel_y, ball.vel_x);
-			angle += ball.vel_angle * delta * (step / distanceLeft);
-			nvx = cos(angle);
-			nvy = sin(angle);
-			ball.vel_x = nvx * vel / delta;
-			ball.vel_y = nvy * vel / delta;
+			{
+				auto angle = atan2(ball.vel_y, ball.vel_x);
+				angle += ball.vel_angle * delta * (step / distanceLeft);
+				nvx = cos(angle);
+				nvy = sin(angle);
+				ball.vel_x = nvx * vel / delta;
+				ball.vel_y = nvy * vel / delta;
+			}
 			
 			// Move the ball
 			ball.x += nvx * step;
@@ -246,6 +267,31 @@ class DodgePong : Drawable {
 			
 			// Check collision
 			Box hitbox = ball.getHitbox();
+			
+			// Striking the ball
+			auto swing = ponger.swing;
+			if(swing) {
+				auto swingHitbox = swing.getHitbox(ponger);
+				if(hitbox.intersectsWith(swingHitbox)) {
+					// STRIKE!!!
+					double sx, sy;
+					swing.getPivot(ponger, sx, sy);
+					
+					double dx = ball.x - sx;
+					double dy = ball.y - sy;
+					double angle = atan2(dy, dx);
+					
+					ball.vel_x = cos(angle) * vel / delta;
+					ball.vel_y = sin(angle) * vel / delta;
+					
+					writeln("D", dx, ", ", dy);
+					writeln("S", sx, ", ", sy);
+					writeln("V", ball.vel_x, ", ", ball.vel_y);
+				}
+			}
+			
+			
+			// Keeping the ball inside the game
 			Box containedBox = hitbox.moveInside(playBoundaries);
 			
 			if(hitbox != containedBox) {
@@ -277,7 +323,7 @@ class DodgePong : Drawable {
 				ball.vel_angle.cap(-PI/4, PI/4);
 
 				// Spin ball
-				angle = atan2(ball.vel_y, ball.vel_x);
+				double angle = atan2(ball.vel_y, ball.vel_x);
 				auto angle_change = PI / (16 - abs(rotate) * 6);
 				angle += random.uniform(-angle_change, angle_change);
 				
@@ -325,13 +371,13 @@ class DodgePong : Drawable {
 	
 	void renderPlayer(RenderTarget renderTarget, RenderStates states) {
 		// Rendering the player
-		enum PLAYER_HEIGHT = 40;
-		enum PLAYER_WIDTH = 35;
+		enum PLAYER_WIDTH = PONGER_HITBOX.width;
+		enum PLAYER_HEIGHT = PONGER_HITBOX.height;
 		enum PLAYER_SIZE = Vector2f(PLAYER_WIDTH, PLAYER_HEIGHT);
 		
 		Transform t = Transform.Identity;
 		t.translate(ponger.x, ponger.y);
-		t.translate(-PLAYER_WIDTH / 2, -PLAYER_HEIGHT / 2);
+		t.translate(PONGER_HITBOX.left, PONGER_HITBOX.top);
 		
 		auto pongerSprite = new RectangleShape(PLAYER_SIZE);
 		pongerSprite.fillColor = Color(255, 255, 255);
@@ -359,6 +405,23 @@ class DodgePong : Drawable {
 		
 		states.transform = t;
 		renderTarget.draw(facingSprite, states);
+		
+		// Rendering swing
+		auto swing = ponger.swing;
+		if(swing) {
+			auto hitbox = swing.getHitbox(ponger);
+			auto hitboxSize = Vector2f(hitbox.width, hitbox.height);
+			auto swingingSprite = new RectangleShape(hitboxSize);
+			
+			swingingSprite.fillColor = Color(255, 255, 0);
+			
+			t = Transform.Identity;
+			//t.translate(ponger.x, ponger.y);
+			//t.translate(-PLAYER_WIDTH / 2, -PLAYER_HEIGHT / 2);
+			t.translate(hitbox.left, hitbox.top);
+			states.transform = t;
+			renderTarget.draw(swingingSprite, states);
+		}
 	}
 	
 	
@@ -467,8 +530,89 @@ class Ponger {
 
 // Representing a swing from the ponger
 struct PongerSwing {
-	Direction direction;
-	double duration;
+	Turning direction;
+	double duration = 0;
+	
+	Box getHitbox(in Ponger swinger) pure const {
+		auto result = swinger.getHitbox();
+		
+		enum PADDING = 12;
+		enum TURNING_OFFSET = 12;
+		enum WIDTH = 30;
+		
+		final switch(swinger.facing) {
+			case(Direction.North):
+				result.left -= PADDING;
+				result.width += PADDING * 2;
+				result.top -= WIDTH;
+				result.height = WIDTH;
+				if(direction == Turning.Clockwise) result.left -= TURNING_OFFSET;
+				else result.left += TURNING_OFFSET;
+				break;
+			
+			case(Direction.East):
+				result.top -= PADDING;
+				result.height += PADDING * 2;
+				result.left += result.width;
+				result.width = WIDTH;
+				if(direction == Turning.Clockwise) result.top -= TURNING_OFFSET;
+				else result.top += TURNING_OFFSET;
+				break;
+			
+			case(Direction.South):
+				result.left -= PADDING;
+				result.width += PADDING * 2;
+				result.top += result.height;
+				result.height = WIDTH;
+				
+				if(direction == Turning.Clockwise) result.left += TURNING_OFFSET;
+				else result.left -= TURNING_OFFSET;
+				break;
+			
+			case(Direction.West):
+				result.top -= PADDING;
+				result.height += PADDING * 2;
+				result.left -= WIDTH;
+				result.width = WIDTH;
+				if(direction == Turning.Clockwise) result.top += TURNING_OFFSET;
+				else result.top -= TURNING_OFFSET;
+				break;
+		}
+		
+		return result;
+	}
+	
+	void getPivot(in Ponger swinger, out double px, out double py) pure const {
+		auto box = swinger.getHitbox();
+		
+		enum MARGIN = 12;
+		
+		final switch(swinger.facing) {
+			case(Direction.North):
+				py = box.top + MARGIN;
+				if(direction == Turning.Clockwise) px = box.left;
+				else px = box.right;
+				break;
+			
+			case(Direction.East):
+				px = box.right - MARGIN;
+				if(direction == Turning.Clockwise) py = box.top;
+				else py = box.bottom;
+				break;
+			
+			case(Direction.South):
+				py = box.bottom - MARGIN;
+				if(direction == Turning.Clockwise) px = box.right;
+				else px = box.left;
+				break;
+			
+			case(Direction.West):
+				px = box.left + MARGIN;
+				if(direction == Turning.Clockwise) py = box.bottom;
+				else py = box.top;
+				break;
+		}
+	}
 }
 
 
@@ -478,7 +622,9 @@ enum Direction {
 	East   = 1,
 	South  = 2,
 	West   = 3,
-	
+}
+
+enum Turning {
 	Clockwise,
 	CounterClockwise
 }
@@ -572,6 +718,15 @@ struct Box {
 	
 	Box shift(in double x, in double y) pure const {
 		return Box(left + x, top + y, width, height);
+	}
+	
+	bool intersectsWith(in Box b) pure const {
+		return !(
+			left           > b.left + b.width  ||
+			left + width  <= b.left            ||
+			top            > b.top  + b.height ||
+			top  + height <= b.top
+		);
 	}
 	
 	bool[4] getPartsOutside(in Box container) pure const {
