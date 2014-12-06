@@ -20,8 +20,9 @@ enum GO_NORTH_KEY = Keyboard.Key.Up;
 enum GO_EAST_KEY  =  Keyboard.Key.Right;
 enum GO_SOUTH_KEY = Keyboard.Key.Down;
 enum GO_WEST_KEY  = Keyboard.Key.Left;
-enum SWING_CW_KEY = Keyboard.Key.D;
-enum SWING_CCW_KEY = Keyboard.Key.A;
+enum SWING_CCW_KEY = Keyboard.Key.D;
+enum SWING_CW_KEY = Keyboard.Key.A;
+enum NEW_GAME_KEY = Keyboard.Key.N;
 
 // Player maxiumum velocity in units per second
 enum PONGER_VELOCITY_CAP = 400;
@@ -31,12 +32,16 @@ enum PONGER_FRICTION = PONGER_VELOCITY_CAP / .2;
 enum PONGER_ACCEL = PONGER_VELOCITY_CAP / .2 + PONGER_FRICTION;
 
 enum BALL_START_SPEED = 600 / .5;
+enum BALL_ANGULAR_FRICTION = PI; // Pretty sure this isn't a thing.
+enum SWING_ANGULAR_POWER = 1;
 
 immutable PONGER_HITBOX = Box(-20, -17, 34, 40);
 immutable BALL_HITBOX = Box(-4, -4, 8, 8);
 
 enum BALL_STEP_SIZE = 10.0;
 enum BALL_STEP_THRESHOLD = .2;
+enum BALL_STRIKE_SHIELD_DURATION = .1;
+
 enum TRACE_LIFE = 0.4;
 enum TRACE_INTERVAL = 6;
 
@@ -90,6 +95,10 @@ class DodgePong : Drawable {
 	// Playable area of the game
 	Box playBoundaries;
 	
+	// Whether the game has started
+	bool gameStarted;
+	
+	
 	this() {
 		// Setup window
 		auto videoMode = VideoMode(GAME_WIDTH, GAME_HEIGHT);
@@ -104,6 +113,12 @@ class DodgePong : Drawable {
 		
 		playBoundaries = Box(0, 0, GAME_WIDTH, GAME_HEIGHT);
 		
+		newGame();
+	}
+	
+	void newGame() {
+		gameStarted = false;
+		
 		// Start up player
 		ponger = new Ponger();
 		ponger.x = GAME_WIDTH / 2;
@@ -112,12 +127,7 @@ class DodgePong : Drawable {
 		// Start up ball
 		ball = new Ball();
 		ball.x = GAME_WIDTH / 2;
-		ball.y = GAME_HEIGHT / 5 * 1;
-		
-		auto startAngle = random.uniform(20.0, 70.0) * random.uniform(0, 3);
-		ball.vel_x = cos(startAngle / 180 * PI) * BALL_START_SPEED;
-		ball.vel_y = sin(startAngle / 180 * PI) * BALL_START_SPEED;
-		
+		ball.y = GAME_HEIGHT / 2;
 	}
 	
 	
@@ -199,6 +209,10 @@ class DodgePong : Drawable {
 			ponger.swing = new PongerSwing();
 			ponger.swing.direction = Turning.CounterClockwise;
 		}
+		
+		if(playerInput.pressedKey.get(NEW_GAME_KEY, false)) {
+			newGame();
+		}
 	}
 	
 	
@@ -207,6 +221,7 @@ class DodgePong : Drawable {
 		updatePonger(delta);
 		updateBall(delta);
 	}
+	
 	
 	void updatePonger(in double delta) {
 		// Update ponger
@@ -232,33 +247,52 @@ class DodgePong : Drawable {
 		}
 	}
 	
+	
 	void updateBall(in double delta) {
-		double distanceLeft = vectorLength(ball.vel_x * delta, ball.vel_y * delta);
+		double distance = vectorLength(ball.vel_x * delta, ball.vel_y * delta);
+		double distanceLeft = distance;
 		
 		do {
-			double nvx, nvy, vel;
-			normalize(ball.vel_x * delta, ball.vel_y * delta, nvx, nvy, vel);
-			
+			// How much will be done this iteration
 			double step = distanceLeft;
 			step.cap(0, BALL_STEP_SIZE);
+			double subDelta = delta * (step / distance);
 			
-			// Remember position
+			// Normalize velocity vector
+			double nvx, nvy, vel;
+			normalize(ball.vel_x, ball.vel_y, nvx, nvy, vel);
+			
+			// Remember current position
 			auto px = ball.x;
 			auto py = ball.y;
 			
-			// Spin ball
-			{
-				auto angle = atan2(ball.vel_y, ball.vel_x);
-				angle += ball.vel_angle * delta * (step / distanceLeft);
-				nvx = cos(angle);
-				nvy = sin(angle);
-				ball.vel_x = nvx * vel / delta;
-				ball.vel_y = nvy * vel / delta;
+			// Remove strike shield
+			if(ball.strikeShield > 0) {
+				ball.strikeShield -= subDelta;
 			}
 			
-			// Move the ball
-			ball.x += nvx * step;
-			ball.y += nvy * step;
+			// Remove angular velocity
+			if(ball.vel_angle > 0) {
+				ball.vel_angle -= BALL_ANGULAR_FRICTION * subDelta;
+				ball.vel_angle.cap(0, ball.vel_angle);
+			} else if(ball.vel_angle < 0) {
+				ball.vel_angle += BALL_ANGULAR_FRICTION * subDelta;
+				ball.vel_angle.cap(ball.vel_angle, 0);
+			}
+			
+			// Spin ball
+			if(step > 0) {
+				auto angle = atan2(ball.vel_y, ball.vel_x);
+				angle += ball.vel_angle * subDelta;
+				nvx = cos(angle);
+				nvy = sin(angle);
+				ball.vel_x = nvx * vel;
+				ball.vel_y = nvy * vel;
+				
+				// Move the ball
+				ball.x += nvx * step;
+				ball.y += nvy * step;
+			}
 			
 			// Check collision
 			Box hitbox = ball.getHitbox();
@@ -269,22 +303,42 @@ class DodgePong : Drawable {
 				auto swingHitbox = swing.getHitbox(ponger);
 				if(hitbox.intersectsWith(swingHitbox)) {
 					// STRIKE!!!
-					double sx, sy;
-					swing.getPivot(ponger, sx, sy);
+					if(ball.strikeShield <= 0) {
+						// Calculate angle between the ball and the swing's "pivot"
+						double sx, sy;
+						swing.getPivot(ponger, sx, sy);
+						
+						double dx = ball.x - sx;
+						double dy = ball.y - sy;
+						
+						double ndx, ndy, dl;
+						normalize(dx, dy, ndx, ndy, dl);
+						
+						// Mixing vectors
+						nvx = nvx + ndx * 3;
+						nvy = nvy + ndy * 3;
+						
+						normalize(nvx, nvy, nvx, nvy, dl);
+						
+						// Adding angular velocity
+						double angle = atan2(dy, dx);
+						ball.vel_angle += angle * SWING_ANGULAR_POWER;
+						
+						// Setting velocities
+						if(gameStarted) {
+							// Strike the ball normally
+							ball.vel_x = nvx * vel;
+							ball.vel_y = nvy * vel;
+						} else {
+							// Set the start speed for the ball
+							ball.vel_x = nvx * BALL_START_SPEED;
+							ball.vel_y = nvy * BALL_START_SPEED;
+						}
+					}
 					
-					double dx = ball.x - sx;
-					double dy = ball.y - sy;
-					double angle = atan2(dy, dx);
-					
-					ball.vel_x = cos(angle) * vel / delta;
-					ball.vel_y = sin(angle) * vel / delta;
-					
-					writeln("D", dx, ", ", dy);
-					writeln("S", sx, ", ", sy);
-					writeln("V", ball.vel_x, ", ", ball.vel_y);
+					ball.strikeShield = BALL_STRIKE_SHIELD_DURATION;
 				}
 			}
-			
 			
 			// Keeping the ball inside the game
 			Box containedBox = hitbox.moveInside(playBoundaries);
@@ -312,21 +366,6 @@ class DodgePong : Drawable {
 						rotate += ball.vel_y;
 					}
 				}
-				
-				rotate /= vel / delta;
-				ball.vel_angle += rotate * PI / 4;
-				ball.vel_angle.cap(-PI/4, PI/4);
-
-				// Spin ball
-				double angle = atan2(ball.vel_y, ball.vel_x);
-				auto angle_change = PI / (16 - abs(rotate) * 6);
-				angle += random.uniform(-angle_change, angle_change);
-				
-				nvx = cos(angle);
-				nvy = sin(angle);
-				
-				ball.vel_x = nvx * vel / delta;
-				ball.vel_y = nvy * vel / delta;
 			}
 			
 			// Calculate displacement
@@ -339,6 +378,11 @@ class DodgePong : Drawable {
 			
 		} while(distanceLeft > BALL_STEP_THRESHOLD);
 		
+		updateBallParticles(delta);
+		
+	}
+	
+	void updateBallParticles(in double delta) {
 		// Age particles
 		int cut = -1;
 		auto particles = ball.traceParticles;
@@ -499,11 +543,9 @@ class Ponger {
 	
 	void updateSpeed(in double delta) pure {
 		// Apply friction
-		auto vel = sqrt(vel_x * vel_x + vel_y * vel_y);
+		double nx, ny, vel;
+		normalize(vel_x, vel_y, nx, ny, vel);
 		if(vel != 0) {
-			// Normalize
-			auto nx = vel_x / vel;
-			auto ny = vel_y / vel;
 			// Slow down
 			vel -= PONGER_FRICTION * delta;
 			cap(vel, 0, vel);
@@ -617,6 +659,9 @@ class Ball {
 	// Movement rate
 	double vel_x = 0, vel_y = 0;
 	double vel_angle = 0;
+	
+	// Fixes striking the same ball twice over multiple frames
+	double strikeShield = 0;
 	
 	// The trace left by the ball
 	TracePartcile[] traceParticles;
