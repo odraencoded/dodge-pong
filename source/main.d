@@ -18,8 +18,6 @@ enum WINDOW_WIDTH  = GAME_WIDTH;
 enum WINDOW_HEIGHT = GAME_HEIGHT + STATUS_HEIGHT;
 enum WINDOW_TITLE = "Dodge Pong";
 
-enum BACKGROUND_COLOR = Color(180, 180, 180, 255);
-
 // Key bindings
 enum GO_NORTH_KEY = Keyboard.Key.Up;
 enum GO_EAST_KEY  =  Keyboard.Key.Right;
@@ -50,6 +48,9 @@ enum SWING_ANGULAR_POWER = 3;
 
 immutable PONGER_HITBOX = Box(-20, -17, 34, 40);
 immutable BALL_HITBOX = Box(-4, -4, 8, 8);
+immutable BALL_BOUNDARY = Box(10, 20 + STATUS_HEIGHT, GAME_WIDTH - 20, GAME_HEIGHT - 20);
+immutable PONGER_BOUNDARY = Box(20, 20 + STATUS_HEIGHT, GAME_WIDTH - 40, GAME_HEIGHT - 20);
+
 
 enum BALL_STEP_SIZE = 10.0;
 enum BALL_STEP_THRESHOLD = .2;
@@ -113,16 +114,13 @@ class DodgePong : Drawable {
 	Ponger ponger;
 	Ball ball;
 	
-	// Playable area of the game
-	Box playBoundaries;
-	
 	// Resources
 	Font statusFont;
 	
 	// Graphics
 	Text scoreText, skillText, timeText;
-	Texture pongerTexture;
-	Sprite pongerSprite;
+	Texture pongerTexture, bgTexture;
+	Sprite pongerSprite, bgSprite;
 	
 	// Whether the game has started
 	bool gameStarted, gameOver;
@@ -145,8 +143,6 @@ class DodgePong : Drawable {
 		keyDirectionalMap[GO_WEST_KEY]  = Direction.West ;
 		keyDirectionalMap.rehash();
 		
-		playBoundaries = Box(0, STATUS_HEIGHT, GAME_WIDTH, GAME_HEIGHT);
-		
 		// Load assets
 		statusFont = new Font;
 		statusFont.loadFromFile("assets/Inconsolata.otf");
@@ -154,11 +150,17 @@ class DodgePong : Drawable {
 		pongerTexture = new Texture;
 		pongerTexture.loadFromFile("assets/ponger.png");
 		
+		bgTexture = new Texture;
+		bgTexture.loadFromFile("assets/background.png");
+		
 		// Setup graphics
 		// Ponger
 		pongerSprite = new Sprite;
 		pongerSprite.setTexture(pongerTexture);
 		
+		// Background
+		bgSprite = new Sprite;
+		bgSprite.setTexture(bgTexture);
 		
 		// Status
 		scoreText = new Text;
@@ -379,7 +381,7 @@ class DodgePong : Drawable {
 		
 		// Boundary collision
 		Box hitbox = ponger.getHitbox();
-		Box containedBox = hitbox.moveInside(playBoundaries);
+		Box containedBox = hitbox.moveInside(PONGER_BOUNDARY);
 		
 		// Update based on offset
 		ponger.x += containedBox.left - hitbox.left;
@@ -561,14 +563,14 @@ class DodgePong : Drawable {
 	void keepBallInsideGame() {
 			// Keeping the ball inside the game
 			Box hitbox = ball.getHitbox();
-			Box containedBox = hitbox.moveInside(playBoundaries);
+			Box containedBox = hitbox.moveInside(BALL_BOUNDARY);
 			
 			if(hitbox != containedBox) {
 				ball.x += containedBox.left - hitbox.left;
 				ball.y += containedBox.top - hitbox.top;
 				
 				// Mirror velocity
-				bool[4] partsOutside = hitbox.getPartsOutside(playBoundaries);
+				bool[4] partsOutside = hitbox.getPartsOutside(BALL_BOUNDARY);
 				if(partsOutside[Direction.North] || partsOutside[Direction.South]) {
 					ball.vel_y *= -1;
 				}
@@ -600,7 +602,7 @@ class DodgePong : Drawable {
 	
 	// Render game
 	override void draw(RenderTarget renderTarget, RenderStates states) {
-		renderTarget.clear(BACKGROUND_COLOR);
+		renderTarget.draw(bgSprite);
 		renderStatus(renderTarget, states);
 		renderPlayer(renderTarget, states);
 		renderBall(renderTarget, states);
