@@ -18,15 +18,14 @@ enum WINDOW_WIDTH  = GAME_WIDTH;
 enum WINDOW_HEIGHT = GAME_HEIGHT + STATUS_HEIGHT;
 enum WINDOW_TITLE = "Dodge Pong";
 
-enum BACKGROUND_COLOR = Color(64, 64, 64, 255);
+enum BACKGROUND_COLOR = Color(180, 180, 180, 255);
 
 // Key bindings
 enum GO_NORTH_KEY = Keyboard.Key.Up;
 enum GO_EAST_KEY  =  Keyboard.Key.Right;
 enum GO_SOUTH_KEY = Keyboard.Key.Down;
 enum GO_WEST_KEY  = Keyboard.Key.Left;
-enum SWING_CCW_KEY = Keyboard.Key.D;
-enum SWING_CW_KEY = Keyboard.Key.A;
+enum SWING_KEY = Keyboard.Key.D;
 enum NEW_GAME_KEY = Keyboard.Key.N;
 
 // Player maxiumum velocity in units per second
@@ -47,7 +46,7 @@ enum BALL_SPEED_STRIKE_SCALAR = BALL_SPEED_STRIKE_CAP / 50; // 50 strikes
 enum BALL_ACCELERATION_RATE = .2;
 
 enum BALL_ANGULAR_FRICTION = PI; // Pretty sure this isn't a thing.
-enum SWING_ANGULAR_POWER = 1;
+enum SWING_ANGULAR_POWER = 3;
 
 immutable PONGER_HITBOX = Box(-20, -17, 34, 40);
 immutable BALL_HITBOX = Box(-4, -4, 8, 8);
@@ -64,6 +63,10 @@ enum SWING_MAX_DURATION = 0.15;
 
 // Speed added to the ball when it's hit
 enum STRIKE_BOOST = BALL_START_SPEED * .5;
+
+// Animation stuff
+enum PONGER_WALKING_RATE = 1.0 / 10; // 20 times per second
+enum PONGER_SWINGING_RATE = .05;
 
 void main(string[] args) {
 	// Setup game
@@ -118,7 +121,8 @@ class DodgePong : Drawable {
 	
 	// Graphics
 	Text scoreText, skillText, timeText;
-	
+	Texture pongerTexture;
+	Sprite pongerSprite;
 	
 	// Whether the game has started
 	bool gameStarted, gameOver;
@@ -143,10 +147,20 @@ class DodgePong : Drawable {
 		
 		playBoundaries = Box(0, STATUS_HEIGHT, GAME_WIDTH, GAME_HEIGHT);
 		
-		// Load resources
+		// Load assets
 		statusFont = new Font;
 		statusFont.loadFromFile("assets/Inconsolata.otf");
 		
+		pongerTexture = new Texture;
+		pongerTexture.loadFromFile("assets/ponger.png");
+		
+		// Setup graphics
+		// Ponger
+		pongerSprite = new Sprite;
+		pongerSprite.setTexture(pongerTexture);
+		
+		
+		// Status
 		scoreText = new Text;
 		scoreText.setFont(statusFont);
 		scoreText.setCharacterSize(30);
@@ -264,16 +278,11 @@ class DodgePong : Drawable {
 				
 				// There are two buttons two swing, one for each side.
 				// idk why I made it like this.
-				if(playerInput.pressedKey.get(SWING_CW_KEY, false)) {
+				if(playerInput.pressedKey.get(SWING_KEY, false)) {
 					ponger.swing = new PongerSwing();
-					ponger.swing.direction = Turning.Clockwise;
 					
-					if(gameStarted) swings++;
-				}
-				
-				if(playerInput.pressedKey.get(SWING_CCW_KEY, false)) {
-					ponger.swing = new PongerSwing();
-					ponger.swing.direction = Turning.CounterClockwise;
+					// Reset animation
+					ponger.animationTime = 0;
 					
 					if(gameStarted) swings++;
 				}
@@ -358,6 +367,9 @@ class DodgePong : Drawable {
 			ponger.vel_y += ponger.going_y * delta * PONGER_ACCEL;
 		}
 		
+		// Update animation
+		ponger.animationTime += delta;
+		
 		// Update speed
 		ponger.updateSpeed(delta);
 		
@@ -381,7 +393,12 @@ class DodgePong : Drawable {
 					// Lose streak
 					streak = 0;
 				}
+				
+				// Remove swing
 				ponger.swing = null;
+				
+				// Update animation
+				ponger.animationTime = 0;
 			}
 		}
 	}
@@ -484,7 +501,11 @@ class DodgePong : Drawable {
 				normalize(nvx, nvy, nvx, nvy, dl);
 				
 				// Adding angular velocity
-				double angle = atan2(dy, dx);
+				double fr = (ponger.facing - 1)* -PI / 2;
+				double rdx = dx * cos(fr) - dy * sin(fr);
+				double rdy = dx * sin(fr) + dy * cos(fr);
+				
+				double angle = atan2(rdy, rdx);
 				ball.vel_angle += angle * SWING_ANGULAR_POWER;
 				
 				// Setting velocities
@@ -598,63 +619,53 @@ class DodgePong : Drawable {
 		renderTarget.draw(timeText);
 	}
 	
+	
 	void renderPlayer(RenderTarget renderTarget, RenderStates states) {
-		// Rendering the player
+		// Rendering the player sprite
 		enum PLAYER_WIDTH = PONGER_HITBOX.width;
 		enum PLAYER_HEIGHT = PONGER_HITBOX.height;
 		enum PLAYER_SIZE = Vector2f(PLAYER_WIDTH, PLAYER_HEIGHT);
 		
+		// Getting frame information
+		immutable(SpriteFrame)* currentFrame;
+		auto directionFrames = PongerFrames[ponger.facing];
+		
+		if(ponger.swing) {
+			auto swingingFrames = directionFrames[PongerAnimation.Swinging];
+			if(ponger.animationTime < PONGER_SWINGING_RATE) {
+				// Focusing
+				currentFrame = &swingingFrames[0];
+			} else {
+				// Swinging
+				currentFrame = &swingingFrames[1];
+			}
+			
+		} else if(!gameOver && (ponger.going_x || ponger.going_y)) {
+			auto walkingFrames = directionFrames[PongerAnimation.Walking];
+			int i = (ponger.animationTime / PONGER_WALKING_RATE).to!int;
+			// +1 because the frame 0 is the standing still frame.
+			i = (i + 1) % walkingFrames.length;
+			currentFrame = &walkingFrames[i];
+		} else {
+			auto walkingFrames = directionFrames[PongerAnimation.Walking];
+			currentFrame = &walkingFrames[0];
+		}
+		
+		
+		auto frameBox = currentFrame.box;
+		
+		// Setting frame settings
+		pongerSprite.textureRect = frameBox.toIntRect;
+		pongerSprite.origin = currentFrame.origin;
+		
+		// Translating to player position
 		Transform t = Transform.Identity;
 		t.translate(ponger.x, ponger.y);
 		t.translate(PONGER_HITBOX.left, PONGER_HITBOX.top);
 		
-		auto pongerSprite = new RectangleShape(PLAYER_SIZE);
-		if(gameOver) {
-			pongerSprite.fillColor = Color(180, 180, 180);
-		} else {
-			pongerSprite.fillColor = Color(255, 255, 255);
-		}
-		
+		// Drawing sprite
 		states.transform = t;
 		renderTarget.draw(pongerSprite, states);
-		
-		// Draw facing(change this later)
-		enum FACING_WIDTH = 8;
-		auto facingSprite = new RectangleShape(PLAYER_SIZE);
-		
-		if(ponger.facing == Direction.North) {
-			facingSprite.size = Vector2f(PLAYER_WIDTH, FACING_WIDTH);
-		} else if(ponger.facing == Direction.East) {
-			facingSprite.size = Vector2f(FACING_WIDTH, PLAYER_HEIGHT);
-			t.translate(PLAYER_WIDTH - FACING_WIDTH, 0);
-		} else if(ponger.facing == Direction.South) {
-			facingSprite.size = Vector2f(PLAYER_WIDTH, FACING_WIDTH);
-			t.translate(0, PLAYER_HEIGHT - FACING_WIDTH);
-		} else if(ponger.facing == Direction.West) {
-			facingSprite.size = Vector2f(FACING_WIDTH, PLAYER_HEIGHT);
-		}
-		
-		facingSprite.fillColor = Color(255, 0, 0);
-		
-		states.transform = t;
-		renderTarget.draw(facingSprite, states);
-		
-		// Rendering swing
-		auto swing = ponger.swing;
-		if(swing) {
-			auto hitbox = swing.getHitbox(ponger);
-			auto hitboxSize = Vector2f(hitbox.width, hitbox.height);
-			auto swingingSprite = new RectangleShape(hitboxSize);
-			
-			swingingSprite.fillColor = Color(255, 255, 0);
-			
-			t = Transform.Identity;
-			//t.translate(ponger.x, ponger.y);
-			//t.translate(-PLAYER_WIDTH / 2, -PLAYER_HEIGHT / 2);
-			t.translate(hitbox.left, hitbox.top);
-			states.transform = t;
-			renderTarget.draw(swingingSprite, states);
-		}
 	}
 	
 	
@@ -722,6 +733,10 @@ class Ponger {
 	int[4] going = [false, false, false, false];
 	Direction facing = Direction.North;
 	
+	// Animation stuff
+	double animationTime = 0;
+	
+	
 	// Gets the ponger's hitbox
 	Box getHitbox() pure const @property {
 		return PONGER_HITBOX.shift(x, y);
@@ -754,17 +769,16 @@ class Ponger {
 	}
 }
 
+
 // Representing a swing from the ponger
 struct PongerSwing {
-	Turning direction;
 	double duration = 0;
 	bool struck = false;
 	
 	Box getHitbox(in Ponger swinger) pure const {
 		auto result = swinger.getHitbox();
 		
-		enum PADDING = 12;
-		enum TURNING_OFFSET = 12;
+		enum PADDING = 24;
 		enum WIDTH = 30;
 		
 		final switch(swinger.facing) {
@@ -772,37 +786,28 @@ struct PongerSwing {
 				result.left -= PADDING;
 				result.width += PADDING * 2;
 				result.top -= WIDTH;
-				result.height = WIDTH;
-				if(direction == Turning.Clockwise) result.left -= TURNING_OFFSET;
-				else result.left += TURNING_OFFSET;
+				result.height = WIDTH + PADDING;
 				break;
 			
 			case(Direction.East):
 				result.top -= PADDING;
 				result.height += PADDING * 2;
-				result.left += result.width;
-				result.width = WIDTH;
-				if(direction == Turning.Clockwise) result.top -= TURNING_OFFSET;
-				else result.top += TURNING_OFFSET;
+				result.left += result.width - PADDING;
+				result.width = WIDTH + PADDING;
 				break;
 			
 			case(Direction.South):
 				result.left -= PADDING;
 				result.width += PADDING * 2;
-				result.top += result.height;
-				result.height = WIDTH;
-				
-				if(direction == Turning.Clockwise) result.left += TURNING_OFFSET;
-				else result.left -= TURNING_OFFSET;
+				result.top += result.height - PADDING;
+				result.height = WIDTH + PADDING;
 				break;
 			
 			case(Direction.West):
 				result.top -= PADDING;
 				result.height += PADDING * 2;
 				result.left -= WIDTH;
-				result.width = WIDTH;
-				if(direction == Turning.Clockwise) result.top += TURNING_OFFSET;
-				else result.top -= TURNING_OFFSET;
+				result.width = WIDTH + PADDING;
 				break;
 		}
 		
@@ -817,30 +822,94 @@ struct PongerSwing {
 		final switch(swinger.facing) {
 			case(Direction.North):
 				py = box.top + MARGIN;
-				if(direction == Turning.Clockwise) px = box.left;
-				else px = box.right;
+				px = box.left;
 				break;
 			
 			case(Direction.East):
 				px = box.right - MARGIN;
-				if(direction == Turning.Clockwise) py = box.top;
-				else py = box.bottom;
+				py = box.top;
 				break;
 			
 			case(Direction.South):
 				py = box.bottom - MARGIN;
-				if(direction == Turning.Clockwise) px = box.right;
-				else px = box.left;
+				px = box.right;
 				break;
 			
 			case(Direction.West):
 				px = box.left + MARGIN;
-				if(direction == Turning.Clockwise) py = box.bottom;
-				else py = box.top;
+				py = box.top;
 				break;
 		}
 	}
 }
+
+
+enum PongerAnimation {
+	Walking = 0,
+	Swinging = 1,
+}
+
+
+immutable PongerFrames = [
+	[ // North
+		[ // Walking
+			SpriteFrame(Box(16,  16, 64, 80), 16, 16),
+			SpriteFrame(Box(16,  96, 64, 80), 16, 16),
+			SpriteFrame(Box(16, 176, 64, 80), 16, 16),
+			SpriteFrame(Box(16, 256, 64, 80), 16, 16),
+		],
+		[ // Swinging
+			SpriteFrame(Box(496, 32, 64, 64), 16, 16),
+			SpriteFrame(Box(496, 96, 96, 96), 16, 48),
+		]
+	], 
+	[ // East
+		[ // Walking
+			SpriteFrame(Box(80,  16, 64, 80), 16, 16),
+			SpriteFrame(Box(80,  96, 64, 80), 16, 16),
+			SpriteFrame(Box(80, 176, 64, 80), 16, 16),
+			SpriteFrame(Box(80, 256, 64, 80), 16, 16),
+		],
+		[ // Swinging
+			SpriteFrame(Box(384,  32, 64, 64), 16, 16),
+			SpriteFrame(Box(384, 128, 96, 96), 16, 16),
+		]
+	], 
+	[ // South
+		[ // Walking
+			SpriteFrame(Box(144,  16, 64, 80), 16, 16),
+			SpriteFrame(Box(144,  96, 64, 80), 16, 16),
+			SpriteFrame(Box(144, 176, 64, 80), 16, 16),
+			SpriteFrame(Box(144, 256, 64, 80), 16, 16),
+		],
+		[ // Swinging
+			SpriteFrame(Box(304,  32, 64, 64), 16, 16),
+			SpriteFrame(Box(288, 128, 96, 96), 32, 16),
+		]
+	], 
+	[ // West
+		[ // Walking
+			SpriteFrame(Box(208,  16, 64, 80), 16, 16),
+			SpriteFrame(Box(208,  96, 64, 80), 16, 16),
+			SpriteFrame(Box(208, 176, 64, 80), 16, 16),
+			SpriteFrame(Box(208, 256, 64, 80), 16, 16),
+		],
+		[ // Swinging
+			SpriteFrame(Box(384, 240, 64, 64), 16, 16),
+			SpriteFrame(Box(368, 336, 96, 96), 48, 16),
+		]
+	]
+];
+
+struct SpriteFrame {
+	Box box;
+	int ox, oy;
+	
+	Vector2f origin() pure const @property {
+		return Vector2f(ox, oy);
+	}
+}
+
 
 // Represents the ball
 class Ball {

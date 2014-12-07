@@ -1,5 +1,8 @@
 // Utility functions/classes/etc
 import std.math;
+import std.conv;
+
+import dsfml.graphics;
 
 // Directions, for directional stuff
 enum Direction {
@@ -7,12 +10,6 @@ enum Direction {
 	East   = 1,
 	South  = 2,
 	West   = 3,
-}
-
-// Turning values for the PongerSwing
-enum Turning {
-	Clockwise,
-	CounterClockwise
 }
 
 // Utility to do the collisions
@@ -63,6 +60,10 @@ struct Box {
 		if(bottom >= container.bottom) result.bottom = container.bottom;
 		if(top     < container.top   ) result.top    = container.top;
 		return result;
+	}
+	
+	IntRect toIntRect() pure const {
+		return IntRect(left.to!int, top.to!int, width.to!int, height.to!int);
 	}
 }
 
