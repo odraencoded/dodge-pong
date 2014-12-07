@@ -2,6 +2,7 @@
 import std.stdio;
 import std.math;
 import std.array;
+import std.conv;
 import random = std.random;
 
 import dsfml.graphics;
@@ -9,11 +10,15 @@ import dsfml.system;
 
 import utility;
 
-enum GAME_WIDTH = 600;
-enum GAME_HEIGHT = 600;
-enum GAME_TITLE = "Dodge Pong";
+enum GAME_WIDTH    = 600;
+enum GAME_HEIGHT   = 600;
+enum STATUS_HEIGHT = 40;
 
-enum BACKGROUND_COLOR = Color(32, 32, 32, 255);
+enum WINDOW_WIDTH  = GAME_WIDTH;
+enum WINDOW_HEIGHT = GAME_HEIGHT + STATUS_HEIGHT;
+enum WINDOW_TITLE = "Dodge Pong";
+
+enum BACKGROUND_COLOR = Color(64, 64, 64, 255);
 
 // Key bindings
 enum GO_NORTH_KEY = Keyboard.Key.Up;
@@ -31,7 +36,16 @@ enum PONGER_FRICTION = PONGER_VELOCITY_CAP / .2;
 // Goes full speed in .2 seconds
 enum PONGER_ACCEL = PONGER_VELOCITY_CAP / .2 + PONGER_FRICTION;
 
-enum BALL_START_SPEED = 600 / .5;
+enum BALL_MAX_SPEED           = 600 / .25;
+enum BALL_START_SPEED         = BALL_MAX_SPEED / 4;
+enum BALL_SPEED_TIME_CAP      = BALL_MAX_SPEED / 4;
+enum BALL_SPEED_STRIKE_CAP    = BALL_MAX_SPEED / 2;
+
+enum BALL_SPEED_TIME_SCALAR   = BALL_SPEED_TIME_CAP / 300; // 5 minutes
+enum BALL_SPEED_STRIKE_SCALAR = BALL_SPEED_STRIKE_CAP / 50; // 50 strikes
+
+enum BALL_ACCELERATION_RATE = .2;
+
 enum BALL_ANGULAR_FRICTION = PI; // Pretty sure this isn't a thing.
 enum SWING_ANGULAR_POWER = 1;
 
@@ -45,7 +59,11 @@ enum BALL_STRIKE_SHIELD_DURATION = .1;
 enum TRACE_LIFE = 0.4;
 enum TRACE_INTERVAL = 6;
 
+// Time between the start of a swing and the time it stops being effective
 enum SWING_MAX_DURATION = 0.15;
+
+// Speed added to the ball when it's hit
+enum STRIKE_BOOST = BALL_START_SPEED * .5;
 
 void main(string[] args) {
 	// Setup game
@@ -95,13 +113,26 @@ class DodgePong : Drawable {
 	// Playable area of the game
 	Box playBoundaries;
 	
+	// Resources
+	Font statusFont;
+	
+	// Graphics
+	Text scoreText, skillText, timeText;
+	
+	
 	// Whether the game has started
 	bool gameStarted, gameOver;
 	
+	// Score data
+	int score;
+	double timePlaying = 0;
+	int swings, strikes, streak;
+	
+	
 	this() {
 		// Setup window
-		auto videoMode = VideoMode(GAME_WIDTH, GAME_HEIGHT);
-		window = new RenderWindow(videoMode, GAME_TITLE);
+		auto videoMode = VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT);
+		window = new RenderWindow(videoMode, WINDOW_TITLE);
 		
 		// Setup key map
 		keyDirectionalMap[GO_NORTH_KEY] = Direction.North;
@@ -110,9 +141,29 @@ class DodgePong : Drawable {
 		keyDirectionalMap[GO_WEST_KEY]  = Direction.West ;
 		keyDirectionalMap.rehash();
 		
-		playBoundaries = Box(0, 0, GAME_WIDTH, GAME_HEIGHT);
+		playBoundaries = Box(0, STATUS_HEIGHT, GAME_WIDTH, GAME_HEIGHT);
+		
+		// Load resources
+		statusFont = new Font;
+		statusFont.loadFromFile("assets/Inconsolata.otf");
+		
+		scoreText = new Text;
+		scoreText.setFont(statusFont);
+		scoreText.setCharacterSize(30);
+		scoreText.setColor(Color(255, 255, 255));
+		
+		timeText = new Text;
+		timeText.setFont(statusFont);
+		timeText.setCharacterSize(30);
+		timeText.setColor(Color(255, 255, 255));
+		
+		skillText = new Text;
+		skillText.setFont(statusFont);
+		skillText.setCharacterSize(30);
+		skillText.setColor(Color(255, 255, 255));
 		
 		newGame();
+		updateStatus();
 	}
 	
 	void newGame() {
@@ -128,6 +179,15 @@ class DodgePong : Drawable {
 		ball = new Ball();
 		ball.x = GAME_WIDTH / 2;
 		ball.y = GAME_HEIGHT / 2;
+		
+		// Reset score
+		timePlaying = 0;
+		score = 0;
+		swings = 0;
+		strikes = 0;
+		streak = 0;
+		ball.naturalSpeed = BALL_START_SPEED;
+		
 	}
 	
 	
@@ -207,11 +267,15 @@ class DodgePong : Drawable {
 				if(playerInput.pressedKey.get(SWING_CW_KEY, false)) {
 					ponger.swing = new PongerSwing();
 					ponger.swing.direction = Turning.Clockwise;
+					
+					if(gameStarted) swings++;
 				}
 				
 				if(playerInput.pressedKey.get(SWING_CCW_KEY, false)) {
 					ponger.swing = new PongerSwing();
 					ponger.swing.direction = Turning.CounterClockwise;
+					
+					if(gameStarted) swings++;
 				}
 			}
 			
@@ -226,8 +290,64 @@ class DodgePong : Drawable {
 	
 	// Updates game variables based on time
 	void update(in double delta) {
+		updateScore(delta);
+		
 		updatePonger(delta);
 		updateBall(delta);
+	}
+	
+	
+	void updateScore(in double delta) {
+		if(!gameOver) {
+			if(gameStarted) {
+				timePlaying += delta;
+			}
+			
+			// Calculate the ball natural speed
+			auto baseSpeed = BALL_START_SPEED;
+			auto timeSpeed = timePlaying * BALL_SPEED_TIME_SCALAR;
+			timeSpeed.cap(0, BALL_SPEED_TIME_CAP);
+			
+			auto strikeSpeed = strikes * BALL_SPEED_STRIKE_SCALAR;
+			strikeSpeed.cap(0, BALL_SPEED_STRIKE_CAP);
+			
+			ball.naturalSpeed = baseSpeed + timeSpeed + strikeSpeed;
+			
+			updateStatus();
+		}
+	}
+	
+	
+	void updateStatus() {
+		// Score text
+		scoreText.position = Vector2f(10, 0);
+		scoreText.setString(score.to!dstring);
+		
+		// Streak text
+		int accuracy;
+		if(swings > 0) {
+			accuracy = strikes * 100 / swings;
+		} else {
+			accuracy = 100;
+		}
+		skillText.setString("%" ~ accuracy.to!dstring ~ " x" ~ streak.to!dstring);
+		auto bounds = skillText.getLocalBounds();
+		skillText.position = Vector2f((WINDOW_WIDTH - bounds.width) / 2, 0);
+		
+		
+		// Time text
+		auto seconds = timePlaying.to!int;
+		if(seconds < 10) {
+			timeText.setString("0:0" ~ seconds.to!dstring);
+		} else if(seconds < 60) {
+			timeText.setString("0:" ~ seconds.to!dstring);
+		} else {
+			auto minutes = seconds / 60;
+			seconds = seconds % 60;
+			timeText.setString(minutes.to!dstring ~ ":" ~ seconds.to!dstring);
+		}
+		bounds = timeText.getLocalBounds();
+		timeText.position = Vector2f(WINDOW_WIDTH - 10 - bounds.width, 0);
 	}
 	
 	
@@ -257,6 +377,10 @@ class DodgePong : Drawable {
 		if(swing) {
 			swing.duration += delta;
 			if(swing.duration > SWING_MAX_DURATION) {
+				if(swing.struck == false) {
+					// Lose streak
+					streak = 0;
+				}
 				ponger.swing = null;
 			}
 		}
@@ -271,7 +395,12 @@ class DodgePong : Drawable {
 			// How much will be done this iteration
 			double step = distanceLeft;
 			step.cap(0, BALL_STEP_SIZE);
-			double subDelta = delta * (step / distance);
+			double subDelta;
+			if(distance == 0) {
+				subDelta = delta;
+			} else {
+				subDelta = delta * (step / distance);
+			}
 			
 			// Remember current position
 			auto px = ball.x;
@@ -280,12 +409,22 @@ class DodgePong : Drawable {
 			// Remove strike shield
 			if(ball.strikeShield > 0)
 				ball.strikeShield -= subDelta;
-			
+		
 			ball.applyAngularFriction(subDelta);
 			
 			// Spin ball
 			if(step > 0) {
 				ball.spin(subDelta);
+				
+				// Accelerate ball
+				double nvx, nvy, vel;
+				normalize(ball.vel_x, ball.vel_y, nvx, nvy, vel);
+				
+				double dvel = ball.naturalSpeed - vel;
+				vel = vel + dvel * subDelta * BALL_ACCELERATION_RATE;
+				
+				ball.vel_x = nvx * vel;
+				ball.vel_y = nvy * vel;
 				
 				// Move the ball
 				ball.x += ball.vel_x * subDelta;
@@ -350,13 +489,25 @@ class DodgePong : Drawable {
 				
 				// Setting velocities
 				if(gameStarted) {
+					// Increase score
+					strikes++;
+					streak++;
+					swing.struck = true;
+					
+					auto pointsScored = vel.to!int;
+					pointsScored *= 1 + streak / 2;
+					score += pointsScored;
+					
+					
 					// Strike the ball normally
-					ball.vel_x = nvx * vel;
-					ball.vel_y = nvy * vel;
+					ball.vel_x = nvx * (vel + STRIKE_BOOST);
+					ball.vel_y = nvy * (vel + STRIKE_BOOST);
 				} else {
 					// Set the start speed for the ball
-					ball.vel_x = nvx * BALL_START_SPEED;
-					ball.vel_y = nvy * BALL_START_SPEED;
+					ball.vel_x = nvx * (ball.naturalSpeed + STRIKE_BOOST);
+					ball.vel_y = nvy * (ball.naturalSpeed + STRIKE_BOOST);
+					
+					gameStarted = true;
 				}
 			}
 			
@@ -371,7 +522,7 @@ class DodgePong : Drawable {
 		auto hitbox = ball.getHitbox();
 		auto pongerBox = ponger.getHitbox();
 		if(hitbox.intersectsWith(pongerBox)) {
-			if(ball.strikeShield <= 0) {
+			if(ball.strikeShield <= 0 && gameStarted) {
 				// Play got hit = game over
 				gameOver = true;
 				
@@ -425,13 +576,27 @@ class DodgePong : Drawable {
 		}
 	}
 	
+	
 	// Render game
 	override void draw(RenderTarget renderTarget, RenderStates states) {
 		renderTarget.clear(BACKGROUND_COLOR);
+		renderStatus(renderTarget, states);
 		renderPlayer(renderTarget, states);
 		renderBall(renderTarget, states);
 	}
 	
+	
+	void renderStatus(RenderTarget renderTarget, RenderStates states) {
+		enum STATUS_SIZE = Vector2f(WINDOW_WIDTH, STATUS_HEIGHT);
+		auto statusBackground = new RectangleShape(STATUS_SIZE);
+		statusBackground.fillColor = Color(0, 0, 0);
+		
+		renderTarget.draw(statusBackground, states);
+		
+		renderTarget.draw(scoreText);
+		renderTarget.draw(skillText);
+		renderTarget.draw(timeText);
+	}
 	
 	void renderPlayer(RenderTarget renderTarget, RenderStates states) {
 		// Rendering the player
@@ -593,6 +758,7 @@ class Ponger {
 struct PongerSwing {
 	Turning direction;
 	double duration = 0;
+	bool struck = false;
 	
 	Box getHitbox(in Ponger swinger) pure const {
 		auto result = swinger.getHitbox();
@@ -684,6 +850,7 @@ class Ball {
 	// Movement rate
 	double vel_x = 0, vel_y = 0;
 	double vel_angle = 0;
+	double naturalSpeed = 0;
 	
 	// Fixes striking the same ball twice over multiple frames
 	double strikeShield = 0;
