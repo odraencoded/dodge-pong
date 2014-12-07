@@ -96,8 +96,7 @@ class DodgePong : Drawable {
 	Box playBoundaries;
 	
 	// Whether the game has started
-	bool gameStarted;
-	
+	bool gameStarted, gameOver;
 	
 	this() {
 		// Setup window
@@ -118,6 +117,7 @@ class DodgePong : Drawable {
 	
 	void newGame() {
 		gameStarted = false;
+		gameOver = false;
 		
 		// Start up player
 		ponger = new Ponger();
@@ -184,34 +184,42 @@ class DodgePong : Drawable {
 	void processInput(in PlayerInput* playerInput) {
 		if(playerInput.closedWindow) {
 			isRunning = false;
-		}
-		
-		// Figure out where the player is going
-		foreach(int key, Direction direction; keyDirectionalMap) {
-			if(playerInput.pressedKey.get(key, false)) {
-				ponger.going[direction] = true;
-				ponger.facing = direction;
+		} else {
+			// If you close the window I won't bother processing the rest
+			if(gameOver == false) {
+				// Game isn't over so we can still play.
+				// Figure out where the player is going
+				foreach(int key, Direction direction; keyDirectionalMap) {
+					if(playerInput.pressedKey.get(key, false)) {
+						ponger.going[direction] = true;
+						ponger.facing = direction;
+					}
+					
+					if(playerInput.releasedKey.get(key, false)) {
+						ponger.going[direction] = false;
+					}
+				}
+				
+				ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
+				
+				// There are two buttons two swing, one for each side.
+				// idk why I made it like this.
+				if(playerInput.pressedKey.get(SWING_CW_KEY, false)) {
+					ponger.swing = new PongerSwing();
+					ponger.swing.direction = Turning.Clockwise;
+				}
+				
+				if(playerInput.pressedKey.get(SWING_CCW_KEY, false)) {
+					ponger.swing = new PongerSwing();
+					ponger.swing.direction = Turning.CounterClockwise;
+				}
 			}
 			
-			if(playerInput.releasedKey.get(key, false)) {
-				ponger.going[direction] = false;
+			// If you lose you can still start a new game.
+			// If you haven't lost you can start a new game too but why would you?
+			if(playerInput.pressedKey.get(NEW_GAME_KEY, false)) {
+				newGame();
 			}
-		}
-		
-		ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
-		
-		if(playerInput.pressedKey.get(SWING_CW_KEY, false)) {
-			ponger.swing = new PongerSwing();
-			ponger.swing.direction = Turning.Clockwise;
-		}
-		
-		if(playerInput.pressedKey.get(SWING_CCW_KEY, false)) {
-			ponger.swing = new PongerSwing();
-			ponger.swing.direction = Turning.CounterClockwise;
-		}
-		
-		if(playerInput.pressedKey.get(NEW_GAME_KEY, false)) {
-			newGame();
 		}
 	}
 	
@@ -224,9 +232,16 @@ class DodgePong : Drawable {
 	
 	
 	void updatePonger(in double delta) {
-		// Update ponger
+		if(!gameOver) {
+			// Increase velocity based on input
+			ponger.vel_x += ponger.going_x * delta * PONGER_ACCEL;
+			ponger.vel_y += ponger.going_y * delta * PONGER_ACCEL;
+		}
+		
+		// Update speed
 		ponger.updateSpeed(delta);
 		
+		// Move
 		ponger.x += ponger.vel_x * delta;
 		ponger.y += ponger.vel_y * delta;
 		
@@ -258,115 +273,28 @@ class DodgePong : Drawable {
 			step.cap(0, BALL_STEP_SIZE);
 			double subDelta = delta * (step / distance);
 			
-			// Normalize velocity vector
-			double nvx, nvy, vel;
-			normalize(ball.vel_x, ball.vel_y, nvx, nvy, vel);
-			
 			// Remember current position
 			auto px = ball.x;
 			auto py = ball.y;
 			
 			// Remove strike shield
-			if(ball.strikeShield > 0) {
+			if(ball.strikeShield > 0)
 				ball.strikeShield -= subDelta;
-			}
 			
-			// Remove angular velocity
-			if(ball.vel_angle > 0) {
-				ball.vel_angle -= BALL_ANGULAR_FRICTION * subDelta;
-				ball.vel_angle.cap(0, ball.vel_angle);
-			} else if(ball.vel_angle < 0) {
-				ball.vel_angle += BALL_ANGULAR_FRICTION * subDelta;
-				ball.vel_angle.cap(ball.vel_angle, 0);
-			}
+			ball.applyAngularFriction(subDelta);
 			
 			// Spin ball
 			if(step > 0) {
-				auto angle = atan2(ball.vel_y, ball.vel_x);
-				angle += ball.vel_angle * subDelta;
-				nvx = cos(angle);
-				nvy = sin(angle);
-				ball.vel_x = nvx * vel;
-				ball.vel_y = nvy * vel;
+				ball.spin(subDelta);
 				
 				// Move the ball
-				ball.x += nvx * step;
-				ball.y += nvy * step;
+				ball.x += ball.vel_x * subDelta;
+				ball.y += ball.vel_y * subDelta;
 			}
 			
-			// Check collision
-			Box hitbox = ball.getHitbox();
-			
-			// Striking the ball
-			auto swing = ponger.swing;
-			if(swing) {
-				auto swingHitbox = swing.getHitbox(ponger);
-				if(hitbox.intersectsWith(swingHitbox)) {
-					// STRIKE!!!
-					if(ball.strikeShield <= 0) {
-						// Calculate angle between the ball and the swing's "pivot"
-						double sx, sy;
-						swing.getPivot(ponger, sx, sy);
-						
-						double dx = ball.x - sx;
-						double dy = ball.y - sy;
-						
-						double ndx, ndy, dl;
-						normalize(dx, dy, ndx, ndy, dl);
-						
-						// Mixing vectors
-						nvx = nvx + ndx * 3;
-						nvy = nvy + ndy * 3;
-						
-						normalize(nvx, nvy, nvx, nvy, dl);
-						
-						// Adding angular velocity
-						double angle = atan2(dy, dx);
-						ball.vel_angle += angle * SWING_ANGULAR_POWER;
-						
-						// Setting velocities
-						if(gameStarted) {
-							// Strike the ball normally
-							ball.vel_x = nvx * vel;
-							ball.vel_y = nvy * vel;
-						} else {
-							// Set the start speed for the ball
-							ball.vel_x = nvx * BALL_START_SPEED;
-							ball.vel_y = nvy * BALL_START_SPEED;
-						}
-					}
-					
-					ball.strikeShield = BALL_STRIKE_SHIELD_DURATION;
-				}
-			}
-			
-			// Keeping the ball inside the game
-			Box containedBox = hitbox.moveInside(playBoundaries);
-			
-			if(hitbox != containedBox) {
-				ball.x += containedBox.left - hitbox.left;
-				ball.y += containedBox.top - hitbox.top;
-				
-				double rotate = 0;
-				
-				bool[4] partsOutside = hitbox.getPartsOutside(playBoundaries);
-				if(partsOutside[Direction.North] || partsOutside[Direction.South]) {
-					ball.vel_y *= -1;
-					if(partsOutside[Direction.North]) {
-						rotate -= ball.vel_x;
-					} else {
-						rotate += ball.vel_x;
-					}
-				}
-				if(partsOutside[Direction.West] || partsOutside[Direction.East]) {
-					ball.vel_x *= -1;
-					if(partsOutside[Direction.West]) {
-						rotate -= ball.vel_y;
-					} else {
-						rotate += ball.vel_y;
-					}
-				}
-			}
+			tryToStrikeBall();
+			tryToHitPonger();
+			keepBallInsideGame();
 			
 			// Calculate displacement
 			auto dx = ball.x - px;
@@ -374,13 +302,110 @@ class DodgePong : Drawable {
 			auto dl = vectorLength(dx, dy);
 			
 			distanceLeft -= dl;
+			
+			// Add trace particles to ball
 			ball.addTraceFrom(px, py);
 			
 		} while(distanceLeft > BALL_STEP_THRESHOLD);
 		
 		updateBallParticles(delta);
-		
 	}
+	
+	
+	void tryToStrikeBall() {
+		// Check collision
+		Box hitbox = ball.getHitbox();
+		
+		// Striking the ball
+		auto swing = ponger.swing;
+		if(swing == null)
+			return; // No way to strike.
+		
+		auto swingHitbox = swing.getHitbox(ponger);
+		if(hitbox.intersectsWith(swingHitbox)) {
+			// STRIKE!!!
+			if(ball.strikeShield <= 0) {
+				double nvx, nvy, vel;
+				normalize(ball.vel_x, ball.vel_y, nvx, nvy, vel);
+				
+				// Calculate angle between the ball and the swing's "pivot"
+				double sx, sy;
+				swing.getPivot(ponger, sx, sy);
+				
+				double dx = ball.x - sx;
+				double dy = ball.y - sy;
+				
+				double ndx, ndy, dl;
+				normalize(dx, dy, ndx, ndy, dl);
+				
+				// Mixing vectors
+				nvx = nvx + ndx * 3;
+				nvy = nvy + ndy * 3;
+				
+				normalize(nvx, nvy, nvx, nvy, dl);
+				
+				// Adding angular velocity
+				double angle = atan2(dy, dx);
+				ball.vel_angle += angle * SWING_ANGULAR_POWER;
+				
+				// Setting velocities
+				if(gameStarted) {
+					// Strike the ball normally
+					ball.vel_x = nvx * vel;
+					ball.vel_y = nvy * vel;
+				} else {
+					// Set the start speed for the ball
+					ball.vel_x = nvx * BALL_START_SPEED;
+					ball.vel_y = nvy * BALL_START_SPEED;
+				}
+			}
+			
+			// Reset shield
+			ball.strikeShield = BALL_STRIKE_SHIELD_DURATION;
+		}
+	}
+	
+	
+	void tryToHitPonger() {
+		// Checking ball collision against player
+		auto hitbox = ball.getHitbox();
+		auto pongerBox = ponger.getHitbox();
+		if(hitbox.intersectsWith(pongerBox)) {
+			if(ball.strikeShield <= 0) {
+				// Play got hit = game over
+				gameOver = true;
+				
+				// Push player
+				ponger.vel_x = ball.vel_x;
+				ponger.vel_y = ball.vel_y;
+			}
+			
+			// Reset strike shield
+			ball.strikeShield = BALL_STRIKE_SHIELD_DURATION;
+		}
+	}
+	
+	
+	void keepBallInsideGame() {
+			// Keeping the ball inside the game
+			Box hitbox = ball.getHitbox();
+			Box containedBox = hitbox.moveInside(playBoundaries);
+			
+			if(hitbox != containedBox) {
+				ball.x += containedBox.left - hitbox.left;
+				ball.y += containedBox.top - hitbox.top;
+				
+				// Mirror velocity
+				bool[4] partsOutside = hitbox.getPartsOutside(playBoundaries);
+				if(partsOutside[Direction.North] || partsOutside[Direction.South]) {
+					ball.vel_y *= -1;
+				}
+				if(partsOutside[Direction.West] || partsOutside[Direction.East]) {
+					ball.vel_x *= -1;
+				}
+			}
+	}
+	
 	
 	void updateBallParticles(in double delta) {
 		// Age particles
@@ -419,7 +444,11 @@ class DodgePong : Drawable {
 		t.translate(PONGER_HITBOX.left, PONGER_HITBOX.top);
 		
 		auto pongerSprite = new RectangleShape(PLAYER_SIZE);
-		pongerSprite.fillColor = Color(255, 255, 255);
+		if(gameOver) {
+			pongerSprite.fillColor = Color(180, 180, 180);
+		} else {
+			pongerSprite.fillColor = Color(255, 255, 255);
+		}
 		
 		states.transform = t;
 		renderTarget.draw(pongerSprite, states);
@@ -553,10 +582,6 @@ class Ponger {
 			vel_x = nx * vel;
 			vel_y = ny * vel;
 		}
-		
-		// Increase velocity based on input
-		vel_x += going_x * delta * PONGER_ACCEL;
-		vel_y += going_y * delta * PONGER_ACCEL;
 		
 		// Cap velocity
 		cap(vel_x, -PONGER_VELOCITY_CAP, PONGER_VELOCITY_CAP);
@@ -693,6 +718,27 @@ class Ball {
 		
 		// Update remainder
 		traceRemainder = (traceRemainder + distance) % TRACE_INTERVAL;
+	}
+	
+	void spin(in double delta) pure {
+		// Rotates the ball velocity based on its angular velocity
+		auto angle = atan2(vel_y, vel_x);
+		angle += vel_angle * delta;
+		
+		auto vel = vectorLength(vel_x, vel_y);
+		vel_x = cos(angle) * vel;
+		vel_y = sin(angle) * vel;
+	}
+	
+	void applyAngularFriction(in double delta) pure {
+		// Decrease the angular velocity of the ball
+		if(vel_angle > 0) {
+			vel_angle -= BALL_ANGULAR_FRICTION * delta;
+			vel_angle.cap(0, vel_angle);
+		} else if(vel_angle < 0) {
+			vel_angle += BALL_ANGULAR_FRICTION * delta;
+			vel_angle.cap(vel_angle, 0);
+		}
 	}
 }
 
