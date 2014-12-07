@@ -9,5 +9,6 @@
 	"buildRequirements": ["allowWarnings"],
 	"dependencies": {
 		"dsfml:graphics": "~master",
+		"dsfml:audio": "~master",
 	},
 }

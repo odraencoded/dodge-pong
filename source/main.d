@@ -5,8 +5,9 @@ import std.array;
 import std.conv;
 import random = std.random;
 
-import dsfml.graphics;
 import dsfml.system;
+import dsfml.graphics;
+import dsfml.audio;
 
 import utility;
 
@@ -125,6 +126,9 @@ class DodgePong : Drawable {
 	Texture pongerTexture, bgTexture;
 	Sprite pongerSprite, bgSprite;
 	
+	// Audio
+	Sound swingSound, strikeSound, wallHitSound, pongerHitSound, newGameSound;
+	
 	// Whether the game has started
 	bool gameStarted, gameOver;
 	
@@ -184,6 +188,39 @@ class DodgePong : Drawable {
 		skillText.setCharacterSize(30);
 		skillText.setColor(Color(255, 255, 255));
 		
+		// Audio
+		auto swingBuffer = new SoundBuffer;
+		swingBuffer.loadFromFile("assets/swing.wav");
+		swingSound = new Sound();
+		swingSound.setBuffer(swingBuffer);
+		
+		swingSound.volume = 70;
+		
+		auto wallHitBuffer = new SoundBuffer;
+		wallHitBuffer.loadFromFile("assets/wall-hit.wav");
+		wallHitSound = new Sound();
+		wallHitSound.setBuffer(wallHitBuffer);
+	
+		wallHitSound.volume = 80;
+		
+		auto strikeBuffer = new SoundBuffer;
+		strikeBuffer.loadFromFile("assets/strike.wav");
+		strikeSound = new Sound();
+		strikeSound.setBuffer(strikeBuffer);
+		strikeSound.volume = 100;
+		
+		auto pongerHitBuffer = new SoundBuffer;
+		pongerHitBuffer.loadFromFile("assets/ponger-hit.wav");
+		pongerHitSound = new Sound();
+		pongerHitSound.setBuffer(pongerHitBuffer);
+		pongerHitSound.volume = 80;
+		
+		auto newGameBuffer = new SoundBuffer;
+		newGameBuffer.loadFromFile("assets/new-game.wav");
+		newGameSound = new Sound();
+		newGameSound.setBuffer(newGameBuffer);
+		newGameSound.volume = 100;
+		
 		newGame();
 		updateStatus();
 	}
@@ -210,6 +247,8 @@ class DodgePong : Drawable {
 		streak = 0;
 		ball.naturalSpeed = BALL_START_SPEED;
 		
+		// Play sound
+		newGameSound.play();
 	}
 	
 	
@@ -290,6 +329,7 @@ class DodgePong : Drawable {
 					if(ponger.swingRecharge <= 0) {
 						ponger.swing = new PongerSwing();
 						ponger.swingRecharge = SWING_RECHARGE_TIME + SWING_DURATION;
+						swingSound.play();
 						
 						// Reset animation
 						ponger.animationTime = 0;
@@ -536,7 +576,6 @@ class DodgePong : Drawable {
 					pointsScored *= 1 + streak / 2;
 					score += pointsScored;
 					
-					
 					// Strike the ball normally
 					ball.vel_x = nvx * (vel + STRIKE_BOOST);
 					ball.vel_y = nvy * (vel + STRIKE_BOOST);
@@ -547,6 +586,9 @@ class DodgePong : Drawable {
 					
 					gameStarted = true;
 				}
+				
+				// Play sound
+				strikeSound.play();
 			}
 			
 			// Reset shield
@@ -563,6 +605,7 @@ class DodgePong : Drawable {
 			if(ball.strikeShield <= 0 && gameStarted) {
 				// Play got hit = game over
 				gameOver = true;
+				pongerHitSound.play();
 				
 				// Push player
 				ponger.vel_x = ball.vel_x;
@@ -592,6 +635,9 @@ class DodgePong : Drawable {
 				if(partsOutside[Direction.West] || partsOutside[Direction.East]) {
 					ball.vel_x *= -1;
 				}
+				
+				// Play sound
+				wallHitSound.play();
 			}
 	}
 	
