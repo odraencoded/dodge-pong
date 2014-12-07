@@ -507,7 +507,8 @@ class DodgePong : Drawable {
 			
 			tryToStrikeBall();
 			tryToHitPonger();
-			keepBallInsideGame();
+			if(!gameOver)
+				keepBallInsideGame();
 			
 			// Calculate displacement
 			auto dx = ball.x - px;
