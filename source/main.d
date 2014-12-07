@@ -139,6 +139,9 @@ class DodgePong : Drawable {
 		auto videoMode = VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT);
 		window = new RenderWindow(videoMode, WINDOW_TITLE);
 		
+		// Disable key repeat
+		window.setKeyRepeatEnabled(false);
+		
 		// Setup key map
 		keyDirectionalMap[GO_NORTH_KEY] = Direction.North;
 		keyDirectionalMap[GO_EAST_KEY]  = Direction.East ;
