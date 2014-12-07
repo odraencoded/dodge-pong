@@ -11,6 +11,7 @@ Controls:
 	Moving: Arrow keys
 	Swing racket: D key
 	New game: N key
+	Pause: ESC
 
 
 Scoring:
