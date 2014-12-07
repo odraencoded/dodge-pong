@@ -26,6 +26,7 @@ enum GO_SOUTH_KEY = Keyboard.Key.Down;
 enum GO_WEST_KEY  = Keyboard.Key.Left;
 enum SWING_KEY = Keyboard.Key.D;
 enum NEW_GAME_KEY = Keyboard.Key.N;
+enum PAUSE_KEY = Keyboard.Key.Escape;
 
 // Player maxiumum velocity in units per second
 enum PONGER_VELOCITY_CAP = 400;
@@ -122,15 +123,16 @@ class DodgePong : Drawable {
 	Font statusFont;
 	
 	// Graphics
-	Text scoreText, skillText, timeText;
+	Text scoreText, skillText, timeText, pauseText, gameOverText;
 	Texture pongerTexture, bgTexture;
 	Sprite pongerSprite, bgSprite;
 	
 	// Audio
-	Sound swingSound, strikeSound, wallHitSound, pongerHitSound, newGameSound;
+	Sound swingSound, strikeSound, wallHitSound, pongerHitSound, newGameSound,
+	      pauseSound;
 	
 	// Whether the game has started
-	bool gameStarted, gameOver;
+	bool gameStarted, gameOver, gamePaused;
 	
 	// Score data
 	int score;
@@ -188,6 +190,18 @@ class DodgePong : Drawable {
 		skillText.setCharacterSize(30);
 		skillText.setColor(Color(255, 255, 255));
 		
+		pauseText = new Text;
+		pauseText.setFont(statusFont);
+		pauseText.setCharacterSize(30);
+		pauseText.setColor(Color(255, 255, 255));
+		pauseText.setString("Paused (Press ESC)");
+		
+		gameOverText = new Text;
+		gameOverText.setFont(statusFont);
+		gameOverText.setCharacterSize(30);
+		gameOverText.setColor(Color(255, 255, 255));
+		gameOverText.setString("Game Over (Press N)");
+		
 		// Audio
 		auto swingBuffer = new SoundBuffer;
 		swingBuffer.loadFromFile("assets/swing.wav");
@@ -220,6 +234,12 @@ class DodgePong : Drawable {
 		newGameSound = new Sound();
 		newGameSound.setBuffer(newGameBuffer);
 		newGameSound.volume = 100;
+		
+		auto pauseBuffer = new SoundBuffer;
+		pauseBuffer.loadFromFile("assets/pause.wav");
+		pauseSound = new Sound();
+		pauseSound.setBuffer(pauseBuffer);
+		pauseSound.volume = 100;
 		
 		newGame();
 		updateStatus();
@@ -281,16 +301,6 @@ class DodgePong : Drawable {
 					playerInput.releasedKey[keyCode] = true;
 					break;
 				
-				case(Event.EventType.MouseButtonPressed):
-					immutable auto buttonCode = event.mouseButton.button;
-					playerInput.pressedButton[buttonCode] = true;
-					break;
-				
-				case(Event.EventType.MouseButtonReleased):
-					immutable auto buttonCode = event.mouseButton.button;
-					playerInput.releasedButton[buttonCode] = true;
-					break;
-				
 				case(Event.EventType.LostFocus):
 					playerInput.lostFocus = true;
 					break;
@@ -308,35 +318,44 @@ class DodgePong : Drawable {
 		} else {
 			// If you close the window I won't bother processing the rest
 			if(gameOver == false) {
-				// Game isn't over so we can still play.
-				// Figure out where the player is going
-				foreach(int key, Direction direction; keyDirectionalMap) {
-					if(playerInput.pressedKey.get(key, false)) {
-						ponger.going[direction] = true;
-						ponger.facing = direction;
+				if(playerInput.pressedKey.get(PAUSE_KEY, false)) {
+					gamePaused = !gamePaused;
+					pauseSound.play();
+				} 
+				
+				if(!gamePaused) {
+					// Game isn't over so we can still play.
+					// Figure out where the player is going
+					foreach(int key, Direction direction; keyDirectionalMap) {
+						if(playerInput.pressedKey.get(key, false)) {
+							ponger.going[direction] = true;
+							ponger.facing = direction;
+						}
+						
+						if(playerInput.releasedKey.get(key, false)) {
+							ponger.going[direction] = false;
+						}
 					}
 					
-					if(playerInput.releasedKey.get(key, false)) {
-						ponger.going[direction] = false;
+					ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
+					
+					// There are two buttons two swing, one for each side.
+					// idk why I made it like this.
+					if(playerInput.pressedKey.get(SWING_KEY, false)) {
+						if(ponger.swingRecharge <= 0) {
+							ponger.swing = new PongerSwing();
+							ponger.swingRecharge = SWING_RECHARGE_TIME + SWING_DURATION;
+							swingSound.play();
+							
+							// Reset animation
+							ponger.animationTime = 0;
+							
+							if(gameStarted) swings++;
+						}
 					}
 				}
-				
-				ponger.computeGoing(ponger.going, ponger.going_x, ponger.going_y);
-				
-				// There are two buttons two swing, one for each side.
-				// idk why I made it like this.
-				if(playerInput.pressedKey.get(SWING_KEY, false)) {
-					if(ponger.swingRecharge <= 0) {
-						ponger.swing = new PongerSwing();
-						ponger.swingRecharge = SWING_RECHARGE_TIME + SWING_DURATION;
-						swingSound.play();
-						
-						// Reset animation
-						ponger.animationTime = 0;
-						
-						if(gameStarted) swings++;
-					}
-				}
+			} else if(playerInput.pressedKey.get(PAUSE_KEY, false)) {
+				newGame();
 			}
 			
 			// If you lose you can still start a new game.
@@ -350,10 +369,11 @@ class DodgePong : Drawable {
 	
 	// Updates game variables based on time
 	void update(in double delta) {
-		updateScore(delta);
-		
-		updatePonger(delta);
-		updateBall(delta);
+		if(!gamePaused) {
+			updateScore(delta);
+			updatePonger(delta);
+			updateBall(delta);
+		}
 	}
 	
 	
@@ -668,6 +688,7 @@ class DodgePong : Drawable {
 		renderStatus(renderTarget, states);
 		renderPlayer(renderTarget, states);
 		renderBall(renderTarget, states);
+		renderCover(renderTarget, states);
 	}
 	
 	
@@ -770,6 +791,41 @@ class DodgePong : Drawable {
 		states.transform = t;
 		renderTarget.draw(ballSprite, states);
 	}
+	
+	
+	void renderCover(RenderTarget renderTarget, RenderStates states) {
+		enum BG_PADDING = 20;
+		enum BG_COLOR = Color(0, 0, 0);
+		
+		Text coverText;
+		
+		if(gameOver) {
+			coverText = gameOverText;
+		} else if(gamePaused) {
+			coverText = pauseText;
+		}
+		
+		if(coverText) {
+			auto textBox = coverText.getLocalBounds();
+			coverText.position = Vector2f(
+				(GAME_WIDTH - textBox.width) / 2,
+				STATUS_HEIGHT + (GAME_HEIGHT - textBox.height) / 2);
+			
+			textBox = coverText.getGlobalBounds();
+			auto bgSize = Vector2f(
+				textBox.width + BG_PADDING * 2,
+				textBox.height + BG_PADDING * 2);
+			
+			auto textBackground = new RectangleShape(bgSize);
+			textBackground.position = Vector2f(
+				textBox.left - BG_PADDING,
+				textBox.top - BG_PADDING);
+			
+			textBackground.fillColor = BG_COLOR;
+			renderTarget.draw(textBackground);
+			renderTarget.draw(coverText);
+		}
+	}
 }
 
 // Used to store game input
@@ -777,7 +833,6 @@ struct PlayerInput {
 	bool closedWindow = false;
 	bool lostFocus = false;
 	bool[int] pressedKey, releasedKey;
-	bool[int] pressedButton, releasedButton;
 }
 
 
