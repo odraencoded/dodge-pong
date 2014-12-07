@@ -38,8 +38,8 @@ enum BALL_START_SPEED         = BALL_MAX_SPEED / 4;
 enum BALL_SPEED_TIME_CAP      = BALL_MAX_SPEED / 4;
 enum BALL_SPEED_STRIKE_CAP    = BALL_MAX_SPEED / 2;
 
-enum BALL_SPEED_TIME_SCALAR   = BALL_SPEED_TIME_CAP / 300; // 5 minutes
-enum BALL_SPEED_STRIKE_SCALAR = BALL_SPEED_STRIKE_CAP / 50; // 50 strikes
+enum BALL_SPEED_TIME_SCALAR   = BALL_SPEED_TIME_CAP / 120; // 2 minutes
+enum BALL_SPEED_STRIKE_SCALAR = BALL_SPEED_STRIKE_CAP / 30; // 30 strikes
 
 enum BALL_ACCELERATION_RATE = .2;
 
@@ -60,7 +60,10 @@ enum TRACE_LIFE = 0.4;
 enum TRACE_INTERVAL = 6;
 
 // Time between the start of a swing and the time it stops being effective
-enum SWING_MAX_DURATION = 0.15;
+enum SWING_DURATION = 0.15;
+
+// Minimum time between a swing and another
+enum SWING_RECHARGE_TIME = .2;
 
 // Speed added to the ball when it's hit
 enum STRIKE_BOOST = BALL_START_SPEED * .5;
@@ -281,12 +284,15 @@ class DodgePong : Drawable {
 				// There are two buttons two swing, one for each side.
 				// idk why I made it like this.
 				if(playerInput.pressedKey.get(SWING_KEY, false)) {
-					ponger.swing = new PongerSwing();
-					
-					// Reset animation
-					ponger.animationTime = 0;
-					
-					if(gameStarted) swings++;
+					if(ponger.swingRecharge <= 0) {
+						ponger.swing = new PongerSwing();
+						ponger.swingRecharge = SWING_RECHARGE_TIME + SWING_DURATION;
+						
+						// Reset animation
+						ponger.animationTime = 0;
+						
+						if(gameStarted) swings++;
+					}
 				}
 			}
 			
@@ -372,6 +378,12 @@ class DodgePong : Drawable {
 		// Update animation
 		ponger.animationTime += delta;
 		
+		// Recharge swing
+		if(ponger.swingRecharge > 0) {
+			ponger.swingRecharge -= delta;
+		}
+		
+		
 		// Update speed
 		ponger.updateSpeed(delta);
 		
@@ -390,7 +402,7 @@ class DodgePong : Drawable {
 		auto swing = ponger.swing;
 		if(swing) {
 			swing.duration += delta;
-			if(swing.duration > SWING_MAX_DURATION) {
+			if(swing.duration > SWING_DURATION) {
 				if(swing.struck == false) {
 					// Lose streak
 					streak = 0;
@@ -726,6 +738,9 @@ class Ponger {
 	
 	// Swing!!!
 	PongerSwing* swing;
+	
+	// Time between a swing and another
+	double swingRecharge = 0;
 	
 	// Movement rate
 	double vel_x = 0, vel_y = 0;
