@@ -4,6 +4,7 @@
 	"copyright": "Copyright © 2014, Leonardo Augusto Pereira",
 	"authors": ["Leonardo Augusto Pereira"],
 	"lflags" : ["+C:\\lib\\DSFML\\"],
+	"lflags-windows": ["/subsystem:windows"],
 	"targetName" : "dodge-pong",
 	"targetPath" : "debug\\",
 	"buildRequirements": ["allowWarnings"],
