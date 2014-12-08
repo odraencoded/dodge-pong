@@ -2,6 +2,7 @@
 import std.stdio;
 import std.math;
 import std.array;
+import std.algorithm;
 import std.conv;
 import random = std.random;
 
@@ -35,7 +36,7 @@ enum PONGER_FRICTION = PONGER_VELOCITY_CAP / .2;
 // Goes full speed in .2 seconds
 enum PONGER_ACCEL = PONGER_VELOCITY_CAP / .2 + PONGER_FRICTION;
 
-enum BALL_MAX_SPEED           = 600 / .25;
+enum BALL_MAX_SPEED           = 600 / .3;
 enum BALL_START_SPEED         = BALL_MAX_SPEED / 4;
 enum BALL_SPEED_TIME_CAP      = BALL_MAX_SPEED / 4;
 enum BALL_SPEED_STRIKE_CAP    = BALL_MAX_SPEED / 2;
@@ -50,16 +51,30 @@ enum SWING_ANGULAR_POWER = 3;
 
 immutable PONGER_HITBOX = Box(-20, -17, 34, 40);
 immutable BALL_HITBOX = Box(-4, -4, 8, 8);
-immutable BALL_BOUNDARY = Box(10, 20 + STATUS_HEIGHT, GAME_WIDTH - 20, GAME_HEIGHT - 20);
-immutable PONGER_BOUNDARY = Box(20, 20 + STATUS_HEIGHT, GAME_WIDTH - 40, GAME_HEIGHT - 20);
+immutable BALL_BOUNDARY =
+	Box(10, 20 + STATUS_HEIGHT, GAME_WIDTH - 20, GAME_HEIGHT - 20);
+immutable PONGER_BOUNDARY =
+	Box(20, 20 + STATUS_HEIGHT, GAME_WIDTH - 40, GAME_HEIGHT - 20);
 
 
 enum BALL_STEP_SIZE = 10.0;
 enum BALL_STEP_THRESHOLD = .2;
 enum BALL_STRIKE_SHIELD_DURATION = .1;
 
-enum TRACE_LIFE = 0.4;
-enum TRACE_INTERVAL = 6;
+enum TRACE_LIFE = .4;
+enum TRACE_INTERVAL = 2;
+
+enum FLICKER_LIFE = .4;
+enum FLICKER_SPAWN_RATE = FLICKER_LIFE / 10;
+enum SPAWN_FLICKER_SPEED_FACTOR = -.2;
+
+enum MIN_HIT_PARTICLES = 3;
+enum MAX_HIT_PARTICLES = 6;
+enum HIT_FLICKER_SPEED_FACTOR = .1;
+
+enum MIN_STRIKE_PARTICLES = 10;
+enum MAX_STRIKE_PARTICLES = 20;
+enum STRIKE_FLICKER_SPEED_FACTOR = .2;
 
 // Time between the start of a swing and the time it stops being effective
 enum SWING_DURATION = 0.15;
@@ -124,7 +139,7 @@ class DodgePong : Drawable {
 	
 	// Graphics
 	Text scoreText, skillText, timeText, pauseText, gameOverText;
-	Texture pongerTexture, bgTexture;
+	Texture pongerTexture, bgTexture, particlesTexture;
 	Sprite pongerSprite, bgSprite;
 	
 	// Audio
@@ -164,6 +179,9 @@ class DodgePong : Drawable {
 		
 		bgTexture = new Texture;
 		bgTexture.loadFromFile("assets/background.png");
+		
+		particlesTexture = new Texture;
+		particlesTexture.loadFromFile("assets/particles.png");
 		
 		// Setup graphics
 		// Ponger
@@ -539,6 +557,7 @@ class DodgePong : Drawable {
 			
 			// Add trace particles to ball
 			ball.addTraceFrom(px, py);
+			ball.flicker(subDelta);
 			
 		} while(distanceLeft > BALL_STEP_THRESHOLD);
 		
@@ -610,6 +629,7 @@ class DodgePong : Drawable {
 				
 				// Play sound
 				strikeSound.play();
+				ball.addStrikeParticles();
 			}
 			
 			// Reset shield
@@ -627,6 +647,7 @@ class DodgePong : Drawable {
 				// Play got hit = game over
 				gameOver = true;
 				pongerHitSound.play();
+				ball.addStrikeParticles();
 				
 				// Push player
 				ponger.vel_x = ball.vel_x;
@@ -659,11 +680,12 @@ class DodgePong : Drawable {
 				
 				// Play sound
 				wallHitSound.play();
+				ball.addHitParticles();
 			}
 	}
 	
 	
-	void updateBallParticles(in double delta) {
+	void updateBallParticles(in double delta) pure {
 		// Age particles
 		int cut = -1;
 		auto particles = ball.traceParticles;
@@ -679,6 +701,19 @@ class DodgePong : Drawable {
 		if(cut != -1) {
 			ball.traceParticles = array(ball.traceParticles[cut + 1..$]);
 		}
+		
+		auto flickeringParticles = ball.flickeringParticles;
+		for(int i = 0; i < flickeringParticles.length; i++) {
+			FlickerParticle* p = &flickeringParticles[i];
+			p.x += p.vx * delta;
+			p.y += p.vy * delta;
+			p.life -= delta;
+			if(p.life <= 0) {
+				flickeringParticles = flickeringParticles.remove(i);
+				i--;
+			}
+		}
+		ball.flickeringParticles = flickeringParticles;
 	}
 	
 	
@@ -755,41 +790,118 @@ class DodgePong : Drawable {
 	
 	
 	void renderBall(RenderTarget renderTarget, RenderStates states) {
-		Transform t;
-		
 		// Rendering of the ball
 		enum BALL_RADIUS = 5;
 		
 		// Rendering particles
-		auto particleSprite = new CircleShape(BALL_RADIUS);
-		foreach(const TracePartcile p; ball.traceParticles) {
-			t = Transform.Identity;
-			t.translate(p.x, p.y);
-			t.translate(-BALL_RADIUS, -BALL_RADIUS);
-			
-			auto scale = p.life / TRACE_LIFE;
-			t.scale(.6 + .4 * scale, .6 + .4 * scale);
-			particleSprite.fillColor = Color(
-				cast(ubyte)(255 * scale),
-				255,
-				cast(ubyte)(255* scale),
-				cast(ubyte)(255 * scale)
-			);
-			
-			states.transform = t;
-			renderTarget.draw(particleSprite, states);
-		}
+		Vertex[] vertices;
+		states.texture = particlesTexture;
+		
+		// Rendering trace
+		vertices = getTraceVertices();
+		
+		states.blendMode = BlendMode.Alpha;
+		renderTarget.draw(vertices, PrimitiveType.Quads, states);
+		
+		states.blendMode = BlendMode.Add;
+		renderTarget.draw(vertices, PrimitiveType.Quads, states);
+		
+		//Rendering flickering
+		vertices = getFlickerVertices();
+		states.blendMode = BlendMode.Alpha;
+		renderTarget.draw(vertices, PrimitiveType.Quads, states);
+		
+		states.blendMode = BlendMode.Add;
+		renderTarget.draw(vertices, PrimitiveType.Quads, states);
 		
 		// Rendering of the ball
-		t = Transform.Identity;
+		vertices = [
+			Vertex(Vector2f(-8, -8), Color(160, 255, 160, 255), Vector2f(16,  0)),
+			Vertex(Vector2f( 8, -8), Color(160, 255, 160, 255), Vector2f(32,  0)),
+			Vertex(Vector2f( 8,  8), Color(160, 255, 160, 255), Vector2f(32, 16)),
+			Vertex(Vector2f(-8,  8), Color(160, 255, 160, 255), Vector2f(16, 16)),
+		];
+		
+		if(gameStarted) {
+			foreach(ref Vertex v; vertices) {
+				v.texCoords.x -= 16;
+			}
+		}
+		
+		Transform t = Transform.Identity;
 		t.translate(ball.x, ball.y);
-		t.translate(-BALL_RADIUS, -BALL_RADIUS);
-		
-		auto ballSprite = new CircleShape(BALL_RADIUS);
-		ballSprite.fillColor = Color(255, 255, 255);
-		
 		states.transform = t;
-		renderTarget.draw(ballSprite, states);
+		
+		if(!gameStarted) {
+			states.blendMode = BlendMode.Alpha;
+			renderTarget.draw(vertices, PrimitiveType.Quads, states);
+		}
+		
+		states.blendMode = BlendMode.Add;
+		renderTarget.draw(vertices, PrimitiveType.Quads, states);
+	}
+	
+	
+	Vertex[] getTraceVertices() {
+		Vertex[] result;
+		
+		enum TRACE_RADIUS = 8;
+		
+		foreach(const TracePartcile p; ball.traceParticles) {
+			Vertex tl, tr, br, bl;
+			
+			tl.position = Vector2f(p.x - TRACE_RADIUS, p.y - TRACE_RADIUS);
+			tr.position = Vector2f(p.x + TRACE_RADIUS, p.y - TRACE_RADIUS);
+			br.position = Vector2f(p.x + TRACE_RADIUS, p.y + TRACE_RADIUS);
+			bl.position = Vector2f(p.x - TRACE_RADIUS, p.y + TRACE_RADIUS);
+			
+			tl.texCoords = Vector2f( 0,  0);
+			tr.texCoords = Vector2f(16,  0);
+			br.texCoords = Vector2f(16, 16);
+			bl.texCoords = Vector2f( 0, 16);
+			
+			auto transition = p.life / TRACE_LIFE;
+			auto alpha = (64 + 64 * transition).to!ubyte;
+			auto mainColor = (127 + 128 * transition).to!ubyte;
+			auto otherColor = (64 + 64 * transition).to!ubyte;
+			
+			bl.color = Color(otherColor, mainColor, otherColor, alpha);
+			tl.color = tr.color = br.color = bl.color;
+			
+			result ~= [tl, tr, br, bl];
+		}
+		
+		return result;
+	}
+	
+	Vertex[] getFlickerVertices() {
+		Vertex[] result;
+		enum FLICKER_RADIUS = 4;
+		foreach(const FlickerParticle p; ball.flickeringParticles) {
+			Vertex tl, tr, br, bl;
+			
+			tl.position = Vector2f(p.x - FLICKER_RADIUS, p.y - FLICKER_RADIUS);
+			tr.position = Vector2f(p.x + FLICKER_RADIUS, p.y - FLICKER_RADIUS);
+			br.position = Vector2f(p.x + FLICKER_RADIUS, p.y + FLICKER_RADIUS);
+			bl.position = Vector2f(p.x - FLICKER_RADIUS, p.y + FLICKER_RADIUS);
+			
+			tl.texCoords = Vector2f(20,  4);
+			tr.texCoords = Vector2f(28,  4);
+			br.texCoords = Vector2f(28, 12);
+			bl.texCoords = Vector2f(20, 12);
+			
+			auto transition = p.life / FLICKER_LIFE;
+			auto alpha = (55 + 200 * transition).to!ubyte;
+			auto mainColor = (55 + 200 * transition).to!ubyte;
+			auto otherColor = (55 + 55 * transition).to!ubyte;
+			
+			bl.color = Color(otherColor, mainColor, otherColor, alpha);
+			tl.color = tr.color = br.color = bl.color;
+			
+			result ~= [tl, tr, br, bl];
+		}
+		
+		return result;
 	}
 	
 	
@@ -1050,6 +1162,9 @@ class Ball {
 	TracePartcile[] traceParticles;
 	double traceRemainder = 0;
 	
+	FlickerParticle[] flickeringParticles;
+	double flickerRemainder = 0;
+	
 	Box getHitbox() pure const {
 		return BALL_HITBOX.shift(x, y);
 	}
@@ -1078,6 +1193,86 @@ class Ball {
 		traceRemainder = (traceRemainder + distance) % TRACE_INTERVAL;
 	}
 	
+	
+	void flicker(in double delta) {
+		FlickerParticle newParticles[];
+		
+		flickerRemainder += delta;
+		while(flickerRemainder >= FLICKER_SPAWN_RATE) {
+			flickerRemainder -= FLICKER_SPAWN_RATE;
+			
+			auto angle = atan2(vel_y, vel_x);
+			auto vel = vectorLength(vel_x, vel_y) * SPAWN_FLICKER_SPEED_FACTOR;
+		
+			FlickerParticle newParticle;
+			
+			auto particleAngle = angle + random.uniform(- PI / 16, PI / 16);
+			
+			newParticle.x = x + random.uniform(-10.0, 10.0);
+			newParticle.y = y + random.uniform(-10.0, 10.0);
+			newParticle.vx = cos(particleAngle) * vel;
+			newParticle.vy = sin(particleAngle) * vel;
+			newParticle.life = FLICKER_LIFE;
+			
+			newParticles ~= newParticle;
+		}
+		
+		flickeringParticles ~= newParticles;
+	}
+	
+	
+	void addHitParticles() {
+		auto nParticles = random.uniform(MIN_HIT_PARTICLES, MAX_HIT_PARTICLES);
+		
+		FlickerParticle newParticles[];
+		auto angle = atan2(vel_y, vel_x);
+		auto vel = vectorLength(vel_x, vel_y) * HIT_FLICKER_SPEED_FACTOR;
+		
+		for(int i = 0; i < nParticles; i++) {
+			FlickerParticle newParticle;
+			
+			auto particleAngle = angle + random.uniform(- PI / 2, PI / 2);
+			
+			newParticle.x = x + random.uniform(-8.0, 8.0);
+			newParticle.y = y + random.uniform(-8.0, 8.0);
+			newParticle.vx = cos(particleAngle) * vel;
+			newParticle.vy = sin(particleAngle) * vel;
+			newParticle.life = FLICKER_LIFE;
+			
+			newParticles ~= newParticle;
+		}
+		
+		flickeringParticles ~= newParticles;
+	}
+	
+	
+	void addStrikeParticles() {
+		auto nParticles = random.uniform(
+			MIN_STRIKE_PARTICLES, MAX_STRIKE_PARTICLES);
+		
+		FlickerParticle newParticles[];
+		auto angle = atan2(vel_y, vel_x);
+		angle += vel_angle * .2;
+		auto vel = vectorLength(vel_x, vel_y) * STRIKE_FLICKER_SPEED_FACTOR;
+		
+		for(int i = 0; i < nParticles; i++) {
+			FlickerParticle newParticle;
+			
+			auto particleAngle = angle + random.uniform(- PI / 3, PI / 3);
+			
+			newParticle.x = x + random.uniform(-16.0, 16.0);
+			newParticle.y = y + random.uniform(-16.0, 16.0);
+			newParticle.vx = cos(particleAngle) * vel;
+			newParticle.vy = sin(particleAngle) * vel;
+			newParticle.life = FLICKER_LIFE;
+			
+			newParticles ~= newParticle;
+		}
+		
+		flickeringParticles ~= newParticles;
+	}
+	
+	
 	void spin(in double delta) pure {
 		// Rotates the ball velocity based on its angular velocity
 		auto angle = atan2(vel_y, vel_x);
@@ -1087,6 +1282,7 @@ class Ball {
 		vel_x = cos(angle) * vel;
 		vel_y = sin(angle) * vel;
 	}
+	
 	
 	void applyAngularFriction(in double delta) pure {
 		// Decrease the angular velocity of the ball
@@ -1103,4 +1299,8 @@ class Ball {
 
 struct TracePartcile {
 	double x, y, life;
+}
+
+struct FlickerParticle {
+	double x, y, vx, vy, life;
 }
