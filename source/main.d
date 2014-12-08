@@ -339,6 +339,7 @@ class DodgePong : Drawable {
 				if(playerInput.pressedKey.get(PAUSE_KEY, false)) {
 					gamePaused = !gamePaused;
 					pauseSound.play();
+					ponger.going = [false, false, false, false];
 				} 
 				
 				if(!gamePaused) {
